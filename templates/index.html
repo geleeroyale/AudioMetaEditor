@@ -1,0 +1,114 @@
+{% extends 'layout.html' %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-md-10">
+        <div class="card mb-4 bg-dark">
+            <div class="card-header">
+                <h4 class="mb-0"><i class="fas fa-file-audio me-2"></i>Upload Audio File</h4>
+            </div>
+            <div class="card-body">
+                <div id="drop-area" class="text-center p-5 mb-3 border border-secondary rounded-3">
+                    <i class="fas fa-cloud-upload-alt fa-3x mb-3"></i>
+                    <p>Drag & drop an audio file here or</p>
+                    <input type="file" id="fileInput" accept=".flac,.mp3,.wav,.aaf" class="d-none">
+                    <button type="button" id="browseButton" class="btn btn-primary">Browse Files</button>
+                    <p class="mt-2 small text-muted">Supported formats: FLAC, AAF, WAV, MP3</p>
+                </div>
+                <div id="upload-progress" class="progress d-none mb-3">
+                    <div class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar" style="width: 0%" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"></div>
+                </div>
+            </div>
+        </div>
+
+        <div id="metadata-editor" class="card mb-4 d-none bg-dark">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h4 class="mb-0"><i class="fas fa-tags me-2"></i>Edit Metadata</h4>
+                <span id="current-file-badge" class="badge bg-info"></span>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-8">
+                        <form id="metadata-form">
+                            <div class="mb-3">
+                                <label for="title" class="form-label">Title</label>
+                                <input type="text" class="form-control" id="title" name="title">
+                            </div>
+                            <div class="mb-3">
+                                <label for="artist" class="form-label">Artist</label>
+                                <input type="text" class="form-control" id="artist" name="artist">
+                            </div>
+                            <div class="mb-3">
+                                <label for="album" class="form-label">Album</label>
+                                <input type="text" class="form-control" id="album" name="album">
+                            </div>
+                            <div class="row">
+                                <div class="col-md-6 mb-3">
+                                    <label for="date" class="form-label">Year/Date</label>
+                                    <input type="text" class="form-control" id="date" name="date">
+                                </div>
+                                <div class="col-md-6 mb-3">
+                                    <label for="genre" class="form-label">Genre</label>
+                                    <input type="text" class="form-control" id="genre" name="genre">
+                                </div>
+                            </div>
+                            <div class="mb-3">
+                                <label for="comment" class="form-label">Comment</label>
+                                <textarea class="form-control" id="comment" name="comment" rows="3"></textarea>
+                            </div>
+                            <div class="d-flex gap-2">
+                                <button type="button" id="save-button" class="btn btn-success">
+                                    <i class="fas fa-save me-2"></i>Save Changes
+                                </button>
+                                <button type="button" id="download-button" class="btn btn-primary">
+                                    <i class="fas fa-download me-2"></i>Download File
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                    <div class="col-md-4">
+                        <div class="card bg-secondary">
+                            <div class="card-header">
+                                <h5 class="mb-0">File Information</h5>
+                            </div>
+                            <div class="card-body">
+                                <dl class="row mb-0">
+                                    <dt class="col-sm-6">Format</dt>
+                                    <dd class="col-sm-6" id="info-format">-</dd>
+                                    
+                                    <dt class="col-sm-6">Channels</dt>
+                                    <dd class="col-sm-6" id="info-channels">-</dd>
+                                    
+                                    <dt class="col-sm-6">Sample Rate</dt>
+                                    <dd class="col-sm-6" id="info-sample-rate">-</dd>
+                                    
+                                    <dt class="col-sm-6">Bit Depth</dt>
+                                    <dd class="col-sm-6" id="info-bit-depth">-</dd>
+                                    
+                                    <dt class="col-sm-6">Duration</dt>
+                                    <dd class="col-sm-6" id="info-duration">-</dd>
+                                </dl>
+                            </div>
+                        </div>
+                        
+                        <div class="mt-3">
+                            <h5>Audio Preview</h5>
+                            <audio id="audio-player" controls class="w-100 mt-2">
+                                Your browser does not support the audio element.
+                            </audio>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <div id="alert-container">
+            <!-- Alerts will be dynamically inserted here -->
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/audiometadata.js') }}"></script>
+{% endblock %}

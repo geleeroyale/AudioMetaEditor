@@ -1,0 +1,94 @@
+/* Custom styles for Audio Metadata Editor */
+
+body {
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+}
+
+main {
+    flex: 1;
+}
+
+/* Drop area styling */
+#drop-area {
+    border: 2px dashed #6c757d;
+    border-radius: 5px;
+    transition: all 0.3s ease;
+    background-color: rgba(52, 58, 64, 0.5);
+}
+
+#drop-area.highlight {
+    border-color: var(--bs-primary);
+    background-color: rgba(13, 110, 253, 0.1);
+}
+
+#drop-area i {
+    color: #6c757d;
+    transition: color 0.3s ease;
+}
+
+#drop-area.highlight i {
+    color: var(--bs-primary);
+}
+
+/* Audio player custom styling */
+audio {
+    background-color: #343a40;
+    border-radius: 5px;
+}
+
+/* Animation for save/load operations */
+.saving-indicator {
+    animation: pulse 1.5s infinite;
+}
+
+@keyframes pulse {
+    0% {
+        opacity: 1;
+    }
+    50% {
+        opacity: 0.5;
+    }
+    100% {
+        opacity: 1;
+    }
+}
+
+/* Toast notifications */
+.toast-container {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    z-index: 1050;
+}
+
+/* Make form labels slightly brighter for better readability */
+.form-label {
+    color: #e9ecef;
+}
+
+/* File information card styling */
+.card-body dl.row dd, 
+.card-body dl.row dt {
+    margin-bottom: 0.5rem;
+}
+
+/* Prevent the file badge from wrapping */
+#current-file-badge {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 300px;
+}
+
+/* Responsive adjustments */
+@media (max-width: 767.98px) {
+    .col-md-4 {
+        margin-top: 1.5rem;
+    }
+    
+    #current-file-badge {
+        max-width: 150px;
+    }
+}
