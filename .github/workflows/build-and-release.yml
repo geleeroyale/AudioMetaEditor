@@ -25,13 +25,13 @@ jobs:
             pyinstaller_args: --onefile --windowed --icon=app_icon.ico
             executable_path: dist/audio_metadata_editor.exe
           - os: macos-latest
-            asset_name: AudioMetaEditor-macOS-Universal-v${{ github.ref_name }}
-            pyinstaller_args: --onefile --windowed --icon=app_icon.icns --target-architecture universal2
-            executable_path: dist/audio_metadata_editor
+            asset_name: AudioMetaEditor-macOS-Universal-v${{ github.ref_name }}.app.zip
+            pyinstaller_args: --windowed --icon=app_icon.icns --target-architecture universal2 --name "Audio Metadata Editor"
+            executable_path: dist/AudioMetaEditor-macOS-Universal-v${{ github.ref_name }}.app.zip
           - os: ubuntu-latest
-            asset_name: AudioMetaEditor-Linux-Ubuntu-v${{ github.ref_name }}
-            pyinstaller_args: --onefile --windowed
-            executable_path: dist/audio_metadata_editor
+            asset_name: AudioMetaEditor-Linux-AppImage-v${{ github.ref_name }}.AppImage
+            pyinstaller_args: --windowed --name "AudioMetaEditor"
+            executable_path: dist/AudioMetaEditor-Linux-AppImage-v${{ github.ref_name }}.AppImage
 
     steps:
       - name: Checkout code
@@ -52,11 +52,73 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: |
           sudo apt-get update
-          sudo apt-get install -y python3-tk
+          sudo apt-get install -y python3-tk python3-dev libtool-bin
+          # Install AppImage tools
+          sudo apt-get install -y fuse libfuse2
+          wget -c https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage -O appimagetool
+          chmod +x appimagetool
 
-      - name: Build executable
+      # Windows build
+      - name: Build executable for Windows
+        if: matrix.os == 'windows-latest'
         run: |
           pyinstaller ${{ matrix.pyinstaller_args }} audio_metadata_editor.py
+
+      # macOS build with proper .app bundle
+      - name: Build macOS app bundle
+        if: matrix.os == 'macos-latest'
+        run: |
+          # Build .app bundle
+          pyinstaller ${{ matrix.pyinstaller_args }} audio_metadata_editor.py
+          # Create a zip file of the .app bundle
+          cd dist
+          mv "Audio Metadata Editor.app" AudioMetaEditor.app
+          zip -r AudioMetaEditor-macOS-Universal-v${{ github.ref_name }}.app.zip AudioMetaEditor.app
+          # Make it executable
+          chmod +x AudioMetaEditor-macOS-Universal-v${{ github.ref_name }}.app.zip
+
+      # Linux build with AppImage
+      - name: Build Linux AppImage
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          # Build the initial package
+          pyinstaller ${{ matrix.pyinstaller_args }} audio_metadata_editor.py
+          
+          # Create AppDir structure
+          mkdir -p AppDir/usr/bin
+          mkdir -p AppDir/usr/share/applications
+          mkdir -p AppDir/usr/share/icons/hicolor/256x256/apps
+          
+          # Copy the executable to AppDir
+          cp -r dist/AudioMetaEditor/* AppDir/usr/bin/
+          
+          # Copy icon
+          cp app_icon.png AppDir/usr/share/icons/hicolor/256x256/apps/audiometaeditor.png
+          
+          # Create desktop file
+          cat > AppDir/usr/share/applications/audiometaeditor.desktop << EOF
+          [Desktop Entry]
+          Name=Audio Metadata Editor
+          Exec=AudioMetaEditor
+          Icon=audiometaeditor
+          Type=Application
+          Categories=AudioVideo;Audio;Utility;
+          Comment=Edit metadata for audio files
+          EOF
+          
+          # Create AppRun file
+          cat > AppDir/AppRun << EOF
+          #!/bin/bash
+          SELF=\$(dirname "\$(readlink -f "\$0")")
+          export PATH="\$SELF/usr/bin:\$PATH"
+          export LD_LIBRARY_PATH="\$SELF/usr/lib:\$LD_LIBRARY_PATH"
+          "\$SELF/usr/bin/AudioMetaEditor" "\$@"
+          EOF
+          
+          chmod +x AppDir/AppRun
+          
+          # Create the AppImage
+          ./appimagetool AppDir dist/AudioMetaEditor-Linux-AppImage-v${{ github.ref_name }}.AppImage
 
       - name: Upload executable as artifact
         uses: actions/upload-artifact@v4
