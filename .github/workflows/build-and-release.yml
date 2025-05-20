@@ -21,15 +21,15 @@ jobs:
         os: [windows-latest, macos-latest, ubuntu-latest]
         include:
           - os: windows-latest
-            asset_name: AudioMetaEditor-Windows.exe
+            asset_name: AudioMetaEditor-Windows-v${{ github.ref_name }}.exe
             pyinstaller_args: --onefile --windowed --icon=app_icon.ico
             executable_path: dist/audio_metadata_editor.exe
           - os: macos-latest
-            asset_name: AudioMetaEditor-macOS
-            pyinstaller_args: --onefile --windowed --icon=app_icon.icns
+            asset_name: AudioMetaEditor-macOS-Universal-v${{ github.ref_name }}
+            pyinstaller_args: --onefile --windowed --icon=app_icon.icns --target-architecture universal2
             executable_path: dist/audio_metadata_editor
           - os: ubuntu-latest
-            asset_name: AudioMetaEditor-Linux
+            asset_name: AudioMetaEditor-Linux-Ubuntu-v${{ github.ref_name }}
             pyinstaller_args: --onefile --windowed
             executable_path: dist/audio_metadata_editor
 
@@ -46,7 +46,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install mutagen
-          pip install pyinstaller
+          pip install pyinstaller>=5.0  # Need newer version for universal2 support
 
       - name: Install Linux dependencies
         if: matrix.os == 'ubuntu-latest'
@@ -95,9 +95,11 @@ jobs:
             ## AudioMetaEditor ${{ github.ref_name }}
 
             ### Downloads
-            - Windows: [AudioMetaEditor-Windows.exe](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/AudioMetaEditor-Windows.exe)
-            - macOS: [AudioMetaEditor-macOS](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/AudioMetaEditor-macOS)
-            - Linux: [AudioMetaEditor-Linux](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/AudioMetaEditor-Linux)
+            Direct download links:
+            
+            - **Windows**: Download the .exe file below
+            - **macOS**: Download the macOS file below (Universal binary for Intel and Apple Silicon)
+            - **Linux**: Download the Linux file below (Built on Ubuntu)
 
             ### Changes
 
