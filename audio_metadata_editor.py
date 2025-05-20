@@ -269,10 +269,16 @@ class AudioMetadataEditor(tk.Tk):
         # Tools menu
         tools_menu = tk.Menu(menubar, tearoff=0)
         
-        # Add Profile submenu
+        # Profile sub-menu
         profile_menu = tk.Menu(tools_menu, tearoff=0)
-        profile_menu.add_command(label="Check Generic Strict Compatibility", command=self.check_compatibility)
+        profile_menu.add_command(label="Check Selected Files Compatibility", command=self.check_compatibility)
+        profile_menu.add_command(label="Scan Directory Recursively", command=self.scan_directory_recursively)
         tools_menu.add_cascade(label="Profile", menu=profile_menu)
+        
+        # Cleanup menu
+        cleanup_menu = tk.Menu(tools_menu, tearoff=0)
+        cleanup_menu.add_command(label="Remove macOS Resource Files", command=self.remove_macos_resource_files)
+        tools_menu.add_cascade(label="Cleanup", menu=cleanup_menu)
         
         tools_menu.add_separator()
         tools_menu.add_command(label="About", command=self.show_about)
@@ -326,6 +332,15 @@ Version 1.0"""
         
         browse_btn = ttk.Button(browser_top_frame, text="Browse...", command=self.browse_directory)
         browse_btn.pack(side=tk.RIGHT)
+        
+        # Add scan directory button below the browse button
+        scan_frame = ttk.Frame(browser_frame)
+        scan_frame.pack(fill=tk.X, pady=(0, 5), padx=5)
+        
+        scan_dir_btn = ttk.Button(scan_frame, text="Scan Directory Recursively", 
+                               command=self.scan_directory_recursively, 
+                               style="Secondary.TButton")
+        scan_dir_btn.pack(side=tk.RIGHT)
         
         # File list with scrollbar
         file_frame = ttk.Frame(browser_frame)
@@ -514,7 +529,7 @@ Version 1.0"""
         revert_btn.pack(side=tk.LEFT, padx=6, pady=3)
         
         # Compatibility check button in edit view
-        check_comp_btn = ttk.Button(btn_frame, text="Check Compatibility", command=self.check_compatibility, style="Secondary.TButton")
+        check_comp_btn = ttk.Button(btn_frame, text="Check Selected", command=self.check_compatibility, style="Secondary.TButton")
         check_comp_btn.pack(side=tk.RIGHT, padx=6, pady=3)
         
         # Auto-fix button (initially hidden, shown after compatibility check)
@@ -710,8 +725,14 @@ Version 1.0"""
             file_path = selected_item[0]  # The iid is the file path
             files_to_check = [file_path]
         
-        # Run the compatibility check
-        self.status_var.set("Checking file compatibility...")
+        # Run the compatibility check on selected files
+        self.check_compatibility_for_files(files_to_check)
+    
+    # Check compatibility of specific files
+    def check_compatibility_for_files(self, files_to_check):
+        """Run compatibility check on specific files"""
+        # Update status
+        self.status_var.set(f"Checking compatibility of {len(files_to_check)} files...")
         self.update_idletasks()
         
         # Use the compatibility checker to validate files
@@ -727,7 +748,199 @@ Version 1.0"""
         # Show the compatibility report
         self.compatibility_checker.show_compatibility_report(self.last_report_data, total_issues)
     
+    # Recursively scan a directory for audio files and check compatibility
+    def scan_directory_recursively(self):
+        """Scan a directory recursively for audio files and check their compatibility"""
+        # Ask the user to select a directory
+        directory = filedialog.askdirectory(title="Select Directory to Scan Recursively")
+        if not directory:
+            return  # User cancelled
+        
+        # Update status
+        self.status_var.set("Scanning directories for audio files...")
+        self.update_idletasks()
+        
+        # Find all audio files recursively
+        audio_files = []
+        total_files = 0
+        scanned_dirs = 0
+        
+        # Progress dialog
+        progress_window = tk.Toplevel(self)
+        progress_window.title("Scanning Directories")
+        progress_window.geometry("400x150")
+        progress_window.transient(self)  # Set as transient to main window
+        progress_window.grab_set()  # Make modal
+        
+        # Progress info
+        progress_frame = ttk.Frame(progress_window, padding=20)
+        progress_frame.pack(fill=tk.BOTH, expand=True)
+        
+        status_var = tk.StringVar(value="Initializing scan...")
+        status_label = ttk.Label(progress_frame, textvariable=status_var)
+        status_label.pack(fill=tk.X, pady=(0, 10))
+        
+        progress_count = tk.StringVar(value="Found: 0 audio files, 0 directories")
+        progress_count_label = ttk.Label(progress_frame, textvariable=progress_count)
+        progress_count_label.pack(fill=tk.X, pady=(0, 10))
+        
+        progress_var = tk.DoubleVar(value=0)
+        progress_bar = ttk.Progressbar(progress_frame, variable=progress_var, mode="indeterminate")
+        progress_bar.pack(fill=tk.X, pady=(0, 10))
+        progress_bar.start(10)
+        
+        # Cancel button
+        cancel_var = tk.BooleanVar(value=False)
+        cancel_button = ttk.Button(progress_frame, text="Cancel", 
+                                command=lambda: cancel_var.set(True))
+        cancel_button.pack(pady=5)
+        
+        # Update progress function
+        def update_progress():
+            progress_count.set(f"Found: {len(audio_files)} audio files, {scanned_dirs} directories")
+            progress_window.update_idletasks()
+            
+            # Check if user cancelled
+            if cancel_var.get():
+                return False
+            return True
+        
+        # Process scan results
+        def process_results():
+            progress_bar.stop()
+            progress_window.destroy()
+            
+            if not audio_files:
+                messagebox.showinfo("No Files Found", 
+                                  "No supported audio files were found in the selected directory.")
+                return
+            
+            # Ask user if they want to proceed with compatibility check
+            if messagebox.askyesno("Scan Complete", 
+                                  f"Found {len(audio_files)} audio files in {scanned_dirs} directories.\n\nProceed with compatibility check?"):
+                # Run compatibility check on all found files
+                self.check_compatibility_for_files(audio_files)
+        
+        # Recursive scanning function (executed in a separate thread)
+        def scan_thread():
+            nonlocal audio_files, total_files, scanned_dirs
+            
+            try:
+                # Walk through directory structure
+                for root, dirs, files in os.walk(directory):
+                    # Update status with current directory
+                    current_dir = os.path.basename(root) or root
+                    status_var.set(f"Scanning: {current_dir}")
+                    scanned_dirs += 1
+                    
+                    # Find audio files in this directory
+                    for filename in files:
+                        if any(filename.lower().endswith(ext) for ext in self.supported_formats):
+                            full_path = os.path.join(root, filename)
+                            audio_files.append(full_path)
+                            total_files += 1
+                    
+                    # Update progress and check for cancel
+                    if scanned_dirs % 5 == 0:  # Update every 5 directories for performance
+                        if not update_progress():
+                            self.after(0, progress_window.destroy)
+                            return  # User cancelled
+                
+                # Scan complete - process results in the main thread
+                self.after(0, process_results)
+                
+            except Exception as e:
+                def show_error():
+                    progress_window.destroy()
+                    messagebox.showerror("Error", f"An error occurred while scanning: {str(e)}")
+                self.after(0, show_error)
+        
+        # Start the scan in a separate thread
+        threading.Thread(target=scan_thread, daemon=True).start()
+    
     # Auto-fix compatibility issues
+    def remove_macos_resource_files(self):
+        """Find and remove macOS resource files that start with ._ in the current directory"""
+        if not self.current_dir:
+            messagebox.showinfo("No Directory Selected", "Please open a directory first.")
+            return
+            
+        # Ask for confirmation
+        if not messagebox.askyesno("Confirm Deletion", 
+                                "This will delete all macOS resource files (starting with ._) \n"
+                                "in the current directory and subdirectories.\n\n"
+                                "These files are not actual audio files but resource forks created by macOS.\n"
+                                "Are you sure you want to continue?"):
+            return
+        
+        # Find all files starting with ._ in the current directory and subdirectories
+        resource_files = []
+        for root, dirs, files in os.walk(self.current_dir):
+            for filename in files:
+                if filename.startswith("._"):
+                    resource_files.append(os.path.join(root, filename))
+        
+        if not resource_files:
+            messagebox.showinfo("No Files Found", "No macOS resource files were found.")
+            return
+        
+        # Create progress dialog
+        progress_window = tk.Toplevel(self)
+        progress_window.title("Removing Resource Files")
+        progress_window.geometry("400x150")
+        progress_window.transient(self)
+        progress_window.grab_set()
+        
+        progress_frame = ttk.Frame(progress_window, padding=20)
+        progress_frame.pack(fill=tk.BOTH, expand=True)
+        
+        status_var = tk.StringVar(value=f"Found {len(resource_files)} resource files to delete")
+        status_label = ttk.Label(progress_frame, textvariable=status_var)
+        status_label.pack(fill=tk.X, pady=(0, 10))
+        
+        progress_var = tk.DoubleVar(value=0)
+        progress_bar = ttk.Progressbar(progress_frame, variable=progress_var, maximum=len(resource_files))
+        progress_bar.pack(fill=tk.X, pady=(0, 10))
+        
+        # Process files
+        deleted_count = 0
+        failed_count = 0
+        failed_files = []
+        
+        for i, file_path in enumerate(resource_files):
+            try:
+                # Update progress
+                filename = os.path.basename(file_path)
+                status_var.set(f"Deleting: {filename}")
+                progress_var.set(i + 1)
+                progress_window.update_idletasks()
+                
+                # Delete the file
+                os.remove(file_path)
+                deleted_count += 1
+            except Exception as e:
+                failed_count += 1
+                failed_files.append((file_path, str(e)))
+        
+        # Close progress dialog
+        progress_window.destroy()
+        
+        # Show results
+        if failed_count == 0:
+            messagebox.showinfo("Deletion Complete", 
+                              f"Successfully deleted {deleted_count} resource files.")
+        else:
+            result = f"Deleted: {deleted_count} files\nFailed: {failed_count} files\n\nFailed files:\n"
+            for path, error in failed_files[:10]:  # Show first 10 failures
+                result += f"- {os.path.basename(path)}: {error}\n"
+            if len(failed_files) > 10:
+                result += f"... and {len(failed_files) - 10} more"
+            
+            messagebox.showwarning("Deletion Results", result)
+        
+        # Refresh the directory view
+        self.load_directory(self.current_dir)
+    
     def auto_fix_compatibility(self):
         """Automatically fix common compatibility issues"""
         if not hasattr(self, 'last_report_data') or not self.last_report_data:
@@ -755,6 +968,23 @@ Version 1.0"""
                 continue
                 
             updates_made = False
+            
+            # Check for macOS resource files to delete
+            if 'macOS resource file detected' in results['issues']:
+                try:
+                    os.remove(full_path)
+                    messagebox.showinfo("File Deleted", 
+                                     f"Deleted problematic macOS resource file:\n{os.path.basename(full_path)}")
+                    # Refresh the directory view if needed
+                    if self.current_dir:
+                        self.load_directory(self.current_dir)
+                    fixed_count += 1
+                    continue  # Skip to next file since this one is deleted
+                except Exception as e:
+                    messagebox.showerror("Deletion Error", 
+                                      f"Could not delete file {os.path.basename(full_path)}:\n{str(e)}")
+                    skipped_count += 1
+                    continue  # Skip to next file
             
             # Auto-fix common issues
             if 'Missing title tag' in results['issues'] and os.path.basename(full_path):
@@ -1132,36 +1362,50 @@ Version 1.0"""
             
             elif file_ext == '.wav':
                 try:
+                    # Get basic WAV info
                     audio = WAVE(file_path)
                     metadata.update({
                         'format': 'WAV',
                         'channels': audio.info.channels,
                         'sample_rate': audio.info.sample_rate,
-                        'bits_per_sample': getattr(audio.info, 'bits_per_sample', 0),
+                        'bits_per_sample': getattr(audio.info, 'bits_per_sample', 16),
                         'length': audio.info.length
                     })
                     
-                    # Try to get ID3 tags if available in WAV
-                    try:
-                        id3 = ID3(file_path)
-                        if 'TIT2' in id3 and hasattr(id3['TIT2'], 'text') and id3['TIT2'].text:
-                            metadata['title'] = id3['TIT2'].text[0]
-                        if 'TPE1' in id3 and hasattr(id3['TPE1'], 'text') and id3['TPE1'].text:
-                            metadata['artist'] = id3['TPE1'].text[0]
-                        if 'TALB' in id3 and hasattr(id3['TALB'], 'text') and id3['TALB'].text:
-                            metadata['album'] = id3['TALB'].text[0]
-                        if 'TDRC' in id3 and hasattr(id3['TDRC'], 'text') and id3['TDRC'].text:
-                            metadata['date'] = str(id3['TDRC'].text[0])
-                        if 'TCON' in id3 and hasattr(id3['TCON'], 'text') and id3['TCON'].text:
-                            metadata['genre'] = str(id3['TCON'].text[0])
-                        if 'COMM' in id3 and hasattr(id3['COMM'], 'text') and id3['COMM'].text:
-                            metadata['comment'] = id3['COMM'].text[0]
-                    except Exception as id3_error:
-                        # WAV may not have ID3 tags, just continue
-                        pass
+                    # Try to get INFO chunks from WAV (the standard WAV metadata format)
+                    if hasattr(audio, 'tags'):
+                        wav_tags = audio.tags
+                        if wav_tags:
+                            # Standard INFO chunk fields
+                            if 'INAM' in wav_tags: metadata['title'] = wav_tags['INAM'][0]
+                            if 'IART' in wav_tags: metadata['artist'] = wav_tags['IART'][0]
+                            if 'IPRD' in wav_tags: metadata['album'] = wav_tags['IPRD'][0]
+                            if 'ICRD' in wav_tags: metadata['date'] = wav_tags['ICRD'][0]
+                            if 'IGNR' in wav_tags: metadata['genre'] = wav_tags['IGNR'][0]
+                            if 'ICMT' in wav_tags: metadata['comment'] = wav_tags['ICMT'][0]
+                    
+                    # Some WAV files might also have ID3 tags (non-standard but common)
+                    # Only try ID3 if we couldn't get valid tags from INFO chunks
+                    if not any([metadata['title'], metadata['artist'], metadata['album']]):
+                        try:
+                            id3 = ID3(file_path)
+                            if 'TIT2' in id3 and hasattr(id3['TIT2'], 'text') and id3['TIT2'].text:
+                                metadata['title'] = id3['TIT2'].text[0]
+                            if 'TPE1' in id3 and hasattr(id3['TPE1'], 'text') and id3['TPE1'].text:
+                                metadata['artist'] = id3['TPE1'].text[0]
+                            if 'TALB' in id3 and hasattr(id3['TALB'], 'text') and id3['TALB'].text:
+                                metadata['album'] = id3['TALB'].text[0]
+                            if 'TDRC' in id3 and hasattr(id3['TDRC'], 'text') and id3['TDRC'].text:
+                                metadata['date'] = str(id3['TDRC'].text[0])
+                            if 'TCON' in id3 and hasattr(id3['TCON'], 'text') and id3['TCON'].text:
+                                metadata['genre'] = str(id3['TCON'].text[0])
+                            if 'COMM' in id3 and hasattr(id3['COMM'], 'text') and id3['COMM'].text:
+                                metadata['comment'] = id3['COMM'].text[0]
+                        except Exception:
+                            # It's normal for WAV files to not have ID3 tags
+                            pass
                 except Exception as e:
                     print(f"Error reading WAV metadata: {str(e)}")
-
                     
             elif file_ext == '.aaf':
                 # AAF handling is more complex, this is a simplified approach
@@ -1239,22 +1483,45 @@ Version 1.0"""
                 audio.save(file_path)
                 
             elif file_ext == '.wav':
-                # WAV files can have ID3 tags, but it's not standard
+                # First, try to write INFO chunks (standard for WAV files)
                 try:
-                    audio = ID3(file_path)
-                except:
-                    # If no ID3 tags exist, create them
-                    audio = ID3()
+                    # Open the WAV file and try to add the INFO chunk
+                    audio = WAVE(file_path)
+                    # Check if we need to create tags
+                    if not hasattr(audio, 'tags') or audio.tags is None:
+                        audio.add_tags()
+                    
+                    # Map metadata to standard INFO chunk fields
+                    if 'title' in metadata and metadata['title']: audio.tags['INAM'] = [metadata['title']]
+                    if 'artist' in metadata and metadata['artist']: audio.tags['IART'] = [metadata['artist']]
+                    if 'album' in metadata and metadata['album']: audio.tags['IPRD'] = [metadata['album']]
+                    if 'date' in metadata and metadata['date']: audio.tags['ICRD'] = [metadata['date']]
+                    if 'genre' in metadata and metadata['genre']: audio.tags['IGNR'] = [metadata['genre']]
+                    if 'comment' in metadata and metadata['comment']: audio.tags['ICMT'] = [metadata['comment']]
+                    
+                    audio.save()
+                except Exception as wav_error:
+                    print(f"Warning: Could not write WAV INFO chunks: {str(wav_error)}")
                 
-                if 'title' in metadata: audio['TIT2'] = TIT2(encoding=3, text=[metadata['title']])
-                if 'artist' in metadata: audio['TPE1'] = TPE1(encoding=3, text=[metadata['artist']])
-                if 'album' in metadata: audio['TALB'] = TALB(encoding=3, text=[metadata['album']])
-                if 'date' in metadata: audio['TDRC'] = TDRC(encoding=3, text=[metadata['date']])
-                if 'genre' in metadata: audio['TCON'] = TCON(encoding=3, text=[metadata['genre']])
-                if 'comment' in metadata: 
-                    audio['COMM'] = COMM(encoding=3, lang='eng', desc='Comment', text=[metadata['comment']])
-                
-                audio.save(file_path)
+                # Also add ID3 tags for broader compatibility
+                try:
+                    try:
+                        id3 = ID3(file_path)
+                    except:
+                        # If no ID3 tags exist, create them
+                        id3 = ID3()
+                    
+                    if 'title' in metadata and metadata['title']: id3['TIT2'] = TIT2(encoding=3, text=[metadata['title']])
+                    if 'artist' in metadata and metadata['artist']: id3['TPE1'] = TPE1(encoding=3, text=[metadata['artist']])
+                    if 'album' in metadata and metadata['album']: id3['TALB'] = TALB(encoding=3, text=[metadata['album']])
+                    if 'date' in metadata and metadata['date']: id3['TDRC'] = TDRC(encoding=3, text=[metadata['date']])
+                    if 'genre' in metadata and metadata['genre']: id3['TCON'] = TCON(encoding=3, text=[metadata['genre']])
+                    if 'comment' in metadata and metadata['comment']: 
+                        id3['COMM'] = COMM(encoding=3, lang='eng', desc='Comment', text=[metadata['comment']])
+                    
+                    id3.save(file_path)
+                except Exception as id3_error:
+                    print(f"Warning: Could not write WAV ID3 tags: {str(id3_error)}")
                 
             elif file_ext == '.aaf':
                 # AAF format requires specialized handling

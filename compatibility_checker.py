@@ -56,8 +56,14 @@ class CompatibilityChecker:
         recommendations = []
         format_info = {}
         
-        # Get file extension
+        # Get file basename and extension
+        file_basename = os.path.basename(file_path)
         file_ext = os.path.splitext(file_path)[1].lower()
+        
+        # Check for problematic macOS resource files
+        if file_basename.startswith("._"):
+            issues.append("macOS resource file detected")
+            recommendations.append("These hidden resource files are not actual audio files and should be deleted")
         
         # Check common issues across all formats
         if not metadata.get('title', '').strip():
@@ -136,18 +142,69 @@ class CompatibilityChecker:
             try:
                 audio = WAVE(file_path)
                 format_info['sample_rate'] = audio.info.sample_rate
+                format_info['bits_per_sample'] = getattr(audio.info, 'bits_per_sample', 16)
+                format_info['channels'] = audio.info.channels
                 
-                # WAV files often don't correctly support metadata
-                warnings.append("WAV format has limited metadata support")
-                recommendations.append("Consider using FLAC or MP3 for better metadata compatibility")
+                # Missing metadata is normal in WAV files - don't flag as issues but as warnings
+                # Remove any "Missing title tag" or "Missing artist tag" from issues list
+                for issue in list(issues):
+                    if issue in ["Missing title tag", "Missing artist tag"]:
+                        issues.remove(issue)
+                        warnings.append(issue + " (normal for WAV files)")
+                
+                # Add specific WAV format note
+                if not any([metadata.get('title'), metadata.get('artist'), metadata.get('album')]):
+                    warnings.append("WAV file has no metadata (this is normal for WAV files)")
+                    recommendations.append("WAV files typically have limited or no metadata support in most players")
+                else:
+                    recommendations.append("Some players may not display the metadata in this WAV file")
                 
                 # Check for non-standard sampling rates
                 if audio.info.sample_rate not in [44100, 48000]:
                     warnings.append(f"Uncommon sample rate: {audio.info.sample_rate}Hz")
-                    recommendations.append("Standard sample rates are 44.1kHz and 48kHz")
+                    recommendations.append("Standard sample rates of 44.1kHz or 48kHz have the best compatibility")
+                    
+                # Check for high bit-depth
+                if format_info['bits_per_sample'] > 16:
+                    warnings.append(f"High bit depth: {format_info['bits_per_sample']}-bit")
+                    recommendations.append("Bit depths above 16-bit may not be supported by all players")
+                    
+                # Check for multichannel
+                if audio.info.channels > 2:
+                    warnings.append(f"Multichannel audio: {audio.info.channels} channels")
+                    recommendations.append("More than 2 channels may not be supported by all players")
+                    
+                # Check for INFO chunks
+                has_info_chunks = False
+                if hasattr(audio, 'tags') and audio.tags:
+                    has_info_chunks = True
+                    format_info['has_info_chunks'] = True
+                    
+                # Check for ID3 tags
+                has_id3 = False
+                try:
+                    id3 = ID3(file_path)
+                    if id3:
+                        has_id3 = True
+                        format_info['has_id3'] = True
+                except Exception:
+                    pass
+                    
+                if has_info_chunks and has_id3:
+                    # Both metadata formats present
+                    format_info['metadata_type'] = "INFO chunks + ID3"
+                elif has_info_chunks:
+                    format_info['metadata_type'] = "INFO chunks only"
+                elif has_id3:
+                    format_info['metadata_type'] = "ID3 only (non-standard)"
+                    warnings.append("WAV file using non-standard ID3 tags")
+                    recommendations.append("Some players may not recognize ID3 tags in WAV files")
+                else:
+                    format_info['metadata_type'] = "No metadata"
                     
             except Exception as e:
                 issues.append(f"Error analyzing WAV file: {str(e)}")
+                recommendations.append("The WAV file may be corrupted or using a non-standard format")
         
         # Return results
         return {
@@ -314,6 +371,46 @@ class CompatibilityChecker:
         if listbox.curselection():
             listbox.event_generate("<<ListboxSelect>>")
 
+    def delete_file(self, file_path, list_index, listbox, fixed_status):
+        """Delete a file (used for macOS resource files)
+        
+        Args:
+            file_path: Path to the file to delete
+            list_index: Index in the listbox
+            listbox: The listbox widget
+            fixed_status: Dictionary tracking fixed status
+        """
+        try:
+            # Delete the file
+            os.remove(file_path)
+            
+            # Mark as fixed
+            fixed_status[list_index] = True
+            
+            # Update listbox display
+            filename = os.path.basename(file_path)
+            new_text = f"{filename} - ✓ Deleted"
+            listbox.delete(list_index)
+            listbox.insert(list_index, new_text)
+            listbox.itemconfig(list_index, fg=self.parent.success_color)
+            
+            # Re-select the item
+            listbox.selection_set(list_index)
+            
+            # Update status
+            self.parent.status_var.set(f"Deleted problematic file: {filename}")
+            
+            # If this is the only file with an issue, hide the auto-fix button
+            if all(fixed_status.values()):
+                self.parent.auto_fix_btn.pack_forget()
+                
+            # Refresh directory view if needed
+            if self.parent.current_dir:
+                self.parent.load_directory(self.parent.current_dir)
+                
+        except Exception as e:
+            messagebox.showerror("Error", f"Could not delete file: {str(e)}")
+    
     def get_suggestions(self, file_path, issue):
         """Get suggested fixes for an issue
         
@@ -535,7 +632,12 @@ class CompatibilityChecker:
                     fix_command = None
                     fix_label = "Fix"
                     
-                    if "Missing title tag" in issue:
+                    if "macOS resource file detected" in issue:
+                        # For macOS resource files, offer to delete them
+                        fix_command = lambda f=full_path: self.delete_file(f, index, file_listbox, fixed_status)
+                        fix_label = "Delete File"
+                    
+                    elif "Missing title tag" in issue:
                         # Extract title from filename
                         suggested_title = os.path.splitext(filename)[0]
                         # Clean up title (remove underscores, dashes, etc.)
