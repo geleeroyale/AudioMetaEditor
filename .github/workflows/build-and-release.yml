@@ -29,9 +29,9 @@ jobs:
             pyinstaller_args: --windowed --icon=app_icon.icns --target-architecture universal2 --name "Audio Metadata Editor"
             executable_path: dist/AudioMetaEditor-macOS-Universal-v${{ github.ref_name }}.app.zip
           - os: ubuntu-latest
-            asset_name: AudioMetaEditor-Linux-AppImage-v${{ github.ref_name }}.AppImage
+            asset_name: AudioMetaEditor-Linux-v${{ github.ref_name }}.zip
             pyinstaller_args: --windowed --name "AudioMetaEditor"
-            executable_path: dist/AudioMetaEditor-Linux-AppImage-v${{ github.ref_name }}.AppImage
+            executable_path: dist/AudioMetaEditor-Linux-v${{ github.ref_name }}.zip
 
     steps:
       - name: Checkout code
@@ -77,48 +77,47 @@ jobs:
           # Make it executable
           chmod +x AudioMetaEditor-macOS-Universal-v${{ github.ref_name }}.app.zip
 
-      # Linux build with AppImage
-      - name: Build Linux AppImage
+      # Linux build with proper packaging
+      - name: Build Linux Package
         if: matrix.os == 'ubuntu-latest'
         run: |
-          # Build the initial package
-          pyinstaller ${{ matrix.pyinstaller_args }} audio_metadata_editor.py
+          # Build the initial package with onefile for simplicity
+          pyinstaller --onefile --windowed --name "AudioMetaEditor" audio_metadata_editor.py
           
-          # Create AppDir structure
-          mkdir -p AppDir/usr/bin
-          mkdir -p AppDir/usr/share/applications
-          mkdir -p AppDir/usr/share/icons/hicolor/256x256/apps
+          # Make executable
+          chmod +x dist/AudioMetaEditor
+          # Rename to include version
+          mv dist/AudioMetaEditor dist/AudioMetaEditor-Linux-v${{ github.ref_name }}
           
-          # Copy the executable to AppDir
-          cp -r dist/AudioMetaEditor/* AppDir/usr/bin/
-          
-          # Copy icon
-          cp app_icon.png AppDir/usr/share/icons/hicolor/256x256/apps/audiometaeditor.png
-          
-          # Create desktop file
-          cat > AppDir/usr/share/applications/audiometaeditor.desktop << EOF
-          [Desktop Entry]
-          Name=Audio Metadata Editor
-          Exec=AudioMetaEditor
-          Icon=audiometaeditor
-          Type=Application
-          Categories=AudioVideo;Audio;Utility;
-          Comment=Edit metadata for audio files
-          EOF
-          
-          # Create AppRun file
-          cat > AppDir/AppRun << EOF
+          # Create a bash wrapper script
+          cat > dist/run-audiometaeditor.sh << EOL
           #!/bin/bash
-          SELF=\$(dirname "\$(readlink -f "\$0")")
-          export PATH="\$SELF/usr/bin:\$PATH"
-          export LD_LIBRARY_PATH="\$SELF/usr/lib:\$LD_LIBRARY_PATH"
-          "\$SELF/usr/bin/AudioMetaEditor" "\$@"
-          EOF
+          # Script to run Audio Metadata Editor on Linux
+          SCRIPT_DIR="\$(dirname "\$(readlink -f "\$0")")"
+          cd "\$SCRIPT_DIR"
+          ./AudioMetaEditor-Linux-v${{ github.ref_name }} "\$@"
+          EOL
           
-          chmod +x AppDir/AppRun
+          chmod +x dist/run-audiometaeditor.sh
           
-          # Create the AppImage
-          ./appimagetool AppDir dist/AudioMetaEditor-Linux-AppImage-v${{ github.ref_name }}.AppImage
+          # Create a README with instructions
+          cat > dist/README.txt << EOL
+          Audio Metadata Editor for Linux
+          ============================
+          
+          To run the application:
+          
+          1. Open a terminal in this directory
+          2. Run: ./run-audiometaeditor.sh
+          
+          Requirements:
+          - Python 3.8 or higher with tkinter
+          - Install with: sudo apt-get install python3-tk
+          EOL
+          
+          # Create a zip file of all Linux files
+          cd dist
+          zip -r AudioMetaEditor-Linux-v${{ github.ref_name }}.zip AudioMetaEditor-Linux-v${{ github.ref_name }} run-audiometaeditor.sh README.txt
 
       - name: Upload executable as artifact
         uses: actions/upload-artifact@v4
