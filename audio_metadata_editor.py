@@ -60,6 +60,9 @@ class AudioMetadataEditor(tk.Tk):
         
         # Initialize compatibility checker
         self.compatibility_checker = CompatibilityChecker(self)
+        
+        # Maximize window at startup
+        self.after(100, self.maximize_window)  # Short delay to ensure window is fully created
 
         try:
             # Attempt to set application icon
@@ -128,6 +131,28 @@ class AudioMetadataEditor(tk.Tk):
         # Bind events
         self.bind("<Control-o>", lambda e: self.browse_directory())
         self.bind("<Control-s>", lambda e: self.save_metadata())
+    
+    def maximize_window(self):
+        """Maximize the window after initialization"""
+        # Get screen dimensions
+        screen_width = self.winfo_screenwidth()
+        screen_height = self.winfo_screenheight()
+        
+        # Maximize the window based on platform
+        if is_macos:
+            # macOS uses state='zoomed' but it might not work on all versions
+            # So we'll also set the geometry to use most of the screen
+            self.state('zoomed')
+            # Leave some margin for the dock and menu bar
+            self.geometry(f"{screen_width-100}x{screen_height-100}+50+50")
+        elif is_windows:
+            # Windows can use state='zoomed'
+            self.state('zoomed')
+        else:
+            # Linux/other platforms
+            self.attributes("-zoomed", True)  # For some window managers
+            # Fallback to manual resizing if needed
+            self.geometry(f"{screen_width}x{screen_height}+0+0")
     
     def configure_modern_style(self):
         # Use the class color attributes (defined in __init__) for consistent styling
@@ -236,6 +261,7 @@ class AudioMetadataEditor(tk.Tk):
         # File menu
         file_menu = tk.Menu(menubar, tearoff=0)
         file_menu.add_command(label="Open Directory...", command=self.browse_directory, accelerator="Ctrl+O")
+        file_menu.add_command(label="Delete Selected Files", command=self.delete_selected_files)
         file_menu.add_separator()
         file_menu.add_command(label="Exit", command=self.quit)
         menubar.add_cascade(label="File", menu=file_menu)
@@ -305,7 +331,7 @@ Version 1.0"""
         file_frame = ttk.Frame(browser_frame)
         file_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
-        # Select All checkbox
+        # Select All checkbox and action buttons
         select_all_frame = ttk.Frame(file_frame)
         select_all_frame.pack(fill=tk.X, pady=(0, 5))
         
@@ -315,6 +341,12 @@ Version 1.0"""
                                        command=self.toggle_select_all,
                                        style="Field.TCheckbutton")
         select_all_cb.pack(side=tk.LEFT, padx=5)
+        
+        # Delete button for quick access
+        delete_btn = ttk.Button(select_all_frame, text="Delete Selected", 
+                              command=self.delete_selected_files,
+                              style="Secondary.TButton")
+        delete_btn.pack(side=tk.RIGHT, padx=5)
         
         # Define columns: Checkbox, Filename, Format, Duration
         columns = ("checked", "filename", "format", "duration")
@@ -558,6 +590,59 @@ Version 1.0"""
         
         # Update UI based on selection
         self.update_ui_for_batch()
+    
+    # Delete selected files
+    def delete_selected_files(self):
+        """Delete the selected/checked files from disk"""
+        # Get checked files
+        checked_files = [fp for fp, checked in self.checked_files_state.items() if checked]
+        
+        # If no files are checked, try to use the currently selected file
+        if not checked_files and self.current_file:
+            checked_files = [self.current_file]
+        
+        # Verify we have files to delete
+        if not checked_files:
+            messagebox.showinfo("No Files Selected", "Please select files to delete using the checkboxes.")
+            return
+        
+        # Show file list for confirmation
+        file_list = "\n".join([os.path.basename(f) for f in checked_files])
+        if len(checked_files) > 10:
+            # Truncate list if too long
+            file_list = "\n".join([os.path.basename(f) for f in checked_files[:10]])
+            file_list += f"\n... and {len(checked_files) - 10} more files"
+        
+        # Confirm deletion
+        if not messagebox.askyesno("Confirm Deletion", 
+                                 f"Are you sure you want to delete these {len(checked_files)} files?\n\n{file_list}", 
+                                 icon="warning"):
+            return
+        
+        # Delete files
+        deleted_count = 0
+        errors = []
+        
+        for file_path in checked_files:
+            try:
+                os.remove(file_path)
+                deleted_count += 1
+            except Exception as e:
+                errors.append(f"{os.path.basename(file_path)}: {str(e)}")
+        
+        # Show results
+        if errors:
+            error_msg = "\n".join(errors[:10])
+            if len(errors) > 10:
+                error_msg += f"\n... and {len(errors) - 10} more errors"
+            messagebox.showerror("Deletion Errors", 
+                               f"Successfully deleted {deleted_count} files, but {len(errors)} errors occurred:\n\n{error_msg}")
+        else:
+            messagebox.showinfo("Deletion Complete", f"Successfully deleted {deleted_count} files.")
+        
+        # Refresh file list
+        if self.current_dir:
+            self.load_directory(self.current_dir)
     
     # Populate file tree with audio files
     def populate_file_tree(self, files):
