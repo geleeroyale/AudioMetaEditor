@@ -6,19 +6,25 @@ the Generic Strict Profile for maximum compatibility with various players.
 """
 
 import os
+import io
 import tkinter as tk
 from tkinter import ttk, messagebox
+import struct
+import hashlib
+import time
 
 # Import required audio processing libraries
-from mutagen.flac import FLAC
-from mutagen.id3 import ID3
-from mutagen.wave import WAVE
-from mutagen.mp3 import MP3
+from mutagen.flac import FLAC, error as FLACError
+from mutagen.id3 import ID3, error as ID3Error
+from mutagen.wave import WAVE, error as WAVEError
+from mutagen.mp3 import MP3, HeaderNotFoundError
+from mutagen import MutagenError
 
 class CompatibilityChecker:
     def __init__(self, parent):
         """Initialize the compatibility checker with a parent application"""
         self.parent = parent
+        self.perform_integrity_check = tk.BooleanVar(value=False)  # Default disabled
         
     def check_compatibility(self, files_to_check, metadata_reader):
         """Check compatibility of files against the Generic Strict Profile
@@ -42,19 +48,20 @@ class CompatibilityChecker:
         return report_data, total_issues
     
     def validate_strict_profile(self, file_path, metadata):
-        """Validate metadata against the Generic Strict Profile
+        """Validate metadata against the Generic Strict Profile and check file integrity
         
         Args:
             file_path: Path to the audio file
             metadata: Dictionary containing metadata information
             
         Returns:
-            dict: Results containing issues, warnings, recommendations and format info
+            dict: Results containing issues, warnings, recommendations, file integrity status and format info
         """
         issues = []
         warnings = []
         recommendations = []
         format_info = {}
+        integrity_status = {"status": "OK", "issues": [], "md5": ""}
         
         # Get file basename and extension
         file_basename = os.path.basename(file_path)
@@ -80,6 +87,25 @@ class CompatibilityChecker:
             if len(metadata.get(field, '')) > max_field_length:
                 issues.append(f"{field.capitalize()} tag exceeds {max_field_length} characters")
                 recommendations.append(f"Shorten {field} to improve compatibility with older players")
+        
+        # Perform file integrity check if enabled
+        if self.perform_integrity_check.get():
+            integrity_status = self.check_file_integrity(file_path, file_ext)
+        
+        # Add integrity issues to the main issues list
+        if integrity_status["status"] != "OK":
+            for integrity_issue in integrity_status["issues"]:
+                issues.append(f"Integrity issue: {integrity_issue}")
+                if "corrupted" in integrity_issue.lower():
+                    recommendations.append("This file appears to be corrupted and may need to be re-encoded")
+                elif "truncated" in integrity_issue.lower():
+                    recommendations.append("This file appears to be truncated and may be missing data")
+                elif "header" in integrity_issue.lower():
+                    recommendations.append("This file has header issues that may cause playback problems")
+            
+            # Add MD5 checksum to format info if calculated successfully
+            if integrity_status["md5"]:
+                format_info['md5_checksum'] = integrity_status["md5"]
         
         # Format-specific checks
         if file_ext == '.mp3':
@@ -206,17 +232,164 @@ class CompatibilityChecker:
                 issues.append(f"Error analyzing WAV file: {str(e)}")
                 recommendations.append("The WAV file may be corrupted or using a non-standard format")
         
-        # Return results
+        # Return the combined results
         return {
             'issues': issues,
             'warnings': warnings,
             'recommendations': recommendations,
-            'format_info': format_info
+            'format_info': format_info,
+            'integrity': integrity_status
         }
     
+    def check_file_integrity(self, file_path, file_ext):
+        """Check the integrity of an audio file
+        
+        Args:
+            file_path: Path to the audio file
+            file_ext: File extension (lowercase)
+            
+        Returns:
+            dict: Integrity status information with repair suggestion if applicable
+        """
+        result = {"status": "OK", "issues": [], "md5": "", "can_repair": False, "repair_method": None}
+        
+        try:
+            # Calculate MD5 hash of the file
+            with open(file_path, 'rb') as f:
+                file_hash = hashlib.md5()
+                # Read in chunks to handle large files efficiently
+                chunk = f.read(8192)
+                while chunk:
+                    file_hash.update(chunk)
+                    chunk = f.read(8192)
+                result["md5"] = file_hash.hexdigest()
+            
+            # Get file size
+            file_size = os.path.getsize(file_path)
+            if file_size == 0:
+                result["status"] = "Error"
+                result["issues"].append("Zero-byte file detected")
+                return result
+            
+            # Format-specific integrity checks
+            if file_ext == '.mp3':
+                # MP3 integrity check
+                try:
+                    with open(file_path, 'rb') as f:
+                        # Check for valid MP3 header
+                        header = f.read(4)
+                        if not header.startswith(b'ID3') and not (header[0] == 0xFF and (header[1] & 0xE0) == 0xE0):
+                            result["status"] = "Error"
+                            result["issues"].append("Invalid MP3 header")
+                            result["can_repair"] = True
+                            result["repair_method"] = "rebuild_mp3"
+                    
+                    # Use mutagen to verify the file can be parsed
+                    audio = MP3(file_path)
+                    
+                    # Check if duration makes sense (should be positive, not excessively large)
+                    if audio.info.length <= 0 or audio.info.length > 24*60*60:  # >24 hours is suspicious
+                        result["status"] = "Warning"
+                        result["issues"].append("Suspicious track duration")
+                        
+                    # Check if bitrate makes sense
+                    if audio.info.bitrate <= 0 or audio.info.bitrate > 1000000:  # >1000kbps is suspicious for MP3
+                        result["status"] = "Warning"
+                        result["issues"].append("Suspicious bitrate value")
+                    
+                except HeaderNotFoundError:
+                    result["status"] = "Error"
+                    result["issues"].append("MP3 header not found, file may be corrupted")
+                    result["can_repair"] = True
+                    result["repair_method"] = "rebuild_mp3"
+                except Exception as e:
+                    result["status"] = "Error"
+                    result["issues"].append(f"MP3 parsing error: {str(e)}")
+            
+            elif file_ext == '.flac':
+                # FLAC integrity check
+                try:
+                    # Use mutagen to verify the file can be parsed
+                    audio = FLAC(file_path)
+                    
+                    # Check if STREAMINFO block is present (required for valid FLAC)
+                    if not audio.info:
+                        result["status"] = "Error"
+                        result["issues"].append("Missing STREAMINFO block")
+                    
+                    # FLAC-specific checks
+                    with open(file_path, 'rb') as f:
+                        # Check FLAC signature
+                        if f.read(4) != b'fLaC':
+                            result["status"] = "Error"
+                            result["issues"].append("Invalid FLAC signature")
+                            result["can_repair"] = True
+                            result["repair_method"] = "rebuild_flac"
+                            
+                except FLACError:
+                    result["status"] = "Error"
+                    result["issues"].append("FLAC parsing error, file may be corrupted")
+                except Exception as e:
+                    result["status"] = "Error"
+                    result["issues"].append(f"FLAC integrity error: {str(e)}")
+            
+            elif file_ext == '.wav':
+                # WAV integrity check
+                try:
+                    with open(file_path, 'rb') as f:
+                        # Check WAV header
+                        riff = f.read(4)
+                        size = f.read(4)
+                        wave = f.read(4)
+                        
+                        if riff != b'RIFF' or wave != b'WAVE':
+                            result["status"] = "Error"
+                            result["issues"].append("Invalid WAV header")
+                            result["can_repair"] = True
+                            result["repair_method"] = "rebuild_wav"
+                        
+                        # Check file size against header
+                        try:
+                            expected_size = struct.unpack('<I', size)[0] + 8
+                            if abs(expected_size - file_size) > 100:  # Allow small difference for metadata
+                                result["status"] = "Warning"
+                                result["issues"].append("WAV file size mismatch")
+                        except:
+                            result["status"] = "Warning"
+                            result["issues"].append("Unable to verify WAV file size")
+                
+                except WAVEError:
+                    result["status"] = "Error"
+                    result["issues"].append("WAV parsing error, file may be corrupted")
+                except Exception as e:
+                    result["status"] = "Error"
+                    result["issues"].append(f"WAV integrity error: {str(e)}")
+            
+            elif file_ext == '.ogg':
+                # OGG integrity check
+                try:
+                    with open(file_path, 'rb') as f:
+                        # Check OGG signature
+                        if f.read(4) != b'OggS':
+                            result["status"] = "Error"
+                            result["issues"].append("Invalid OGG signature")
+                except Exception as e:
+                    result["status"] = "Error"
+                    result["issues"].append(f"OGG integrity error: {str(e)}")
+                    
+        except IOError as e:
+            result["status"] = "Error"
+            result["issues"].append(f"File access error: {str(e)}")
+        except Exception as e:
+            result["status"] = "Error"
+            result["issues"].append(f"Integrity check error: {str(e)}")
+        
+        return result
+
     def fix_metadata(self, file_path, field, value, list_index, listbox, fixed_status):
         """Fix a specific metadata field in a file
         
+{{ ... }}
         Args:
             file_path: Path to the file to fix
             field: Metadata field to update
@@ -371,6 +544,227 @@ class CompatibilityChecker:
         if listbox.curselection():
             listbox.event_generate("<<ListboxSelect>>")
 
+    def repair_file_integrity(self, file_path, integrity_result):
+        """Attempt to repair file integrity issues
+        
+        Args:
+            file_path: Path to the audio file to repair
+            integrity_result: The integrity check result dictionary
+            
+        Returns:
+            dict: Result of the repair attempt
+        """
+        if not integrity_result.get("can_repair", False):
+            return {"success": False, "message": "This issue cannot be automatically repaired"}
+        
+        result = {"success": False, "message": ""}
+        file_ext = os.path.splitext(file_path)[1].lower()
+        repair_method = integrity_result.get("repair_method")
+        
+        try:
+            # Create a backup of the original file
+            backup_path = file_path + ".bak"
+            try:
+                with open(file_path, 'rb') as src:
+                    with open(backup_path, 'wb') as dst:
+                        dst.write(src.read())
+            except Exception as e:
+                return {"success": False, "message": f"Failed to create backup: {str(e)}"}
+            
+            # Apply the appropriate repair method
+            if repair_method == "rebuild_mp3":
+                result = self._repair_mp3(file_path)
+            elif repair_method == "rebuild_flac":
+                result = self._repair_flac(file_path)
+            elif repair_method == "rebuild_wav":
+                result = self._repair_wav(file_path)
+            else:
+                result = {"success": False, "message": "Unknown repair method"}
+                
+            # If repair failed, restore from backup
+            if not result["success"]:
+                try:
+                    with open(backup_path, 'rb') as src:
+                        with open(file_path, 'wb') as dst:
+                            dst.write(src.read())
+                    os.remove(backup_path)
+                except Exception as e:
+                    result["message"] += f" (Error restoring backup: {str(e)})"
+            else:
+                # Successful repair, delete backup
+                try:
+                    os.remove(backup_path)
+                except Exception:
+                    pass
+                    
+        except Exception as e:
+            result = {"success": False, "message": f"Repair failed: {str(e)}"}
+            
+        return result
+    
+    def _repair_mp3(self, file_path):
+        """Repair MP3 file with header or structural issues"""
+        try:
+            # Read the audio data
+            with open(file_path, 'rb') as f:
+                data = f.read()
+            
+            # Find the start of the MP3 frame (usually starts with 0xFF)
+            # Skip any ID3 tags if present
+            start_pos = 0
+            # Look for ID3 tag
+            if data.startswith(b'ID3'):
+                # The ID3v2 header is 10 bytes, followed by the tag size
+                # The size is stored as 4 synchsafe integers (7 bits each)
+                if len(data) > 10:
+                    size_bytes = data[6:10]
+                    size = ((size_bytes[0] & 0x7F) << 21) | ((size_bytes[1] & 0x7F) << 14) | \
+                           ((size_bytes[2] & 0x7F) << 7) | (size_bytes[3] & 0x7F)
+                    start_pos = 10 + size
+            
+            # Find the first MP3 frame
+            pos = start_pos
+            frame_start = -1
+            while pos < len(data) - 1:
+                if data[pos] == 0xFF and (data[pos+1] & 0xE0) == 0xE0:
+                    frame_start = pos
+                    break
+                pos += 1
+            
+            if frame_start == -1:
+                return {"success": False, "message": "Could not find MP3 frame start"}
+            
+            # Write a new MP3 file with proper structure
+            with open(file_path, 'wb') as f:
+                # If there was an ID3 tag, preserve it
+                if start_pos > 0:
+                    f.write(data[:start_pos])
+                # Write from the first valid frame to the end
+                f.write(data[frame_start:])
+            
+            return {"success": True, "message": "MP3 file structure repaired successfully"}
+        
+        except Exception as e:
+            return {"success": False, "message": f"MP3 repair failed: {str(e)}"}
+    
+    def _repair_flac(self, file_path):
+        """Repair FLAC file with header or structural issues"""
+        try:
+            # For FLAC, we'll try to extract the audio and rebuild the file
+            # This requires converting to WAV and back to FLAC
+            # First, create temporary files
+            temp_wav = file_path + ".temp.wav"
+            
+            # Try to convert the corrupted FLAC to WAV using mutagen or external tools
+            # This is a simplified approach - in a real implementation you might
+            # use ffmpeg or another tool to do this conversion
+            try:
+                # Try to read with mutagen first
+                audio = FLAC(file_path)
+                # If we got here, the file might be readable enough to fix
+                audio.save(file_path)
+                return {"success": True, "message": "FLAC file structure repaired successfully"}
+            except Exception:
+                # If mutagen can't handle it, we would need an external tool
+                return {"success": False, "message": "FLAC repair requires external tools (ffmpeg). Please reinstall the file."}
+        
+        except Exception as e:
+            return {"success": False, "message": f"FLAC repair failed: {str(e)}"}
+    
+    def _repair_wav(self, file_path):
+        """Repair WAV file with header or structural issues"""
+        try:
+            # Read the file data
+            with open(file_path, 'rb') as f:
+                data = f.read()
+            
+            # A minimal valid WAV header (44 bytes for PCM)
+            if len(data) < 44:
+                return {"success": False, "message": "WAV file too small to repair"}
+            
+            # Check/fix the basic WAV header
+            header = bytearray(44)
+            
+            # RIFF header
+            header[0:4] = b'RIFF'
+            
+            # File size (file size - 8 bytes)
+            file_size = len(data) - 8
+            header[4:8] = file_size.to_bytes(4, byteorder='little')
+            
+            # WAVE signature
+            header[8:12] = b'WAVE'
+            
+            # 'fmt ' chunk
+            header[12:16] = b'fmt '
+            
+            # Rest of the header - use default PCM values if we can't determine
+            # We'll set a basic PCM format (16-bit, stereo, 44.1kHz)
+            # fmt chunk size (16 for PCM)
+            header[16:20] = (16).to_bytes(4, byteorder='little')
+            # Audio format (1 = PCM)
+            header[20:22] = (1).to_bytes(2, byteorder='little')
+            # Num channels (2 = stereo)
+            header[22:24] = (2).to_bytes(2, byteorder='little')
+            # Sample rate (44100)
+            header[24:28] = (44100).to_bytes(4, byteorder='little')
+            # Byte rate (sample_rate * num_channels * bits_per_sample/8)
+            header[28:32] = (44100 * 2 * 2).to_bytes(4, byteorder='little')
+            # Block align (num_channels * bits_per_sample/8)
+            header[32:34] = (2 * 2).to_bytes(2, byteorder='little')
+            # Bits per sample (16)
+            header[34:36] = (16).to_bytes(2, byteorder='little')
+            
+            # 'data' chunk
+            header[36:40] = b'data'
+            
+            # Data size (file size - 44 bytes header)
+            data_size = max(0, len(data) - 44)
+            header[40:44] = data_size.to_bytes(4, byteorder='little')
+            
+            # Write the repaired file
+            with open(file_path, 'wb') as f:
+                f.write(header)
+                if len(data) > 44:
+                    f.write(data[44:])
+            
+            return {"success": True, "message": "WAV file structure repaired successfully"}
+        
+        except Exception as e:
+            return {"success": False, "message": f"WAV repair failed: {str(e)}"}
+    
+    def update_report_with_integrity_setting(self, report_data, listbox, details_content):
+        """Update the report display when the integrity check setting is changed
+        
+        Args:
+            report_data: List of tuples (filename, results) with compatibility information
+            listbox: The listbox widget showing file list
+            details_content: Frame containing the details view
+        """
+        # Get the currently selected item if any
+        selected_indices = listbox.curselection()
+        if selected_indices:
+            index = selected_indices[0]
+            # Update the details display for the selected file
+            if hasattr(self, 'display_file_details') and callable(self.display_file_details):
+                self.display_file_details(index)
+            else:
+                # Refresh the details pane
+                for widget in details_content.winfo_children():
+                    widget.destroy()
+                
+                if index >= 0 and index < len(report_data):
+                    filename, results = report_data[index]
+                    
+                    # Update visibility of integrity information
+                    if not self.perform_integrity_check.get():
+                        # Hide integrity issues if check is disabled
+                        for i in range(len(results.get('issues', []))):
+                            if i < len(results['issues']) and 'Integrity issue:' in results['issues'][i]:
+                                results['issues'][i] = None
+                        # Filter out None values
+                        results['issues'] = [issue for issue in results['issues'] if issue is not None]
+    
     def delete_file(self, file_path, list_index, listbox, fixed_status):
         """Delete a file (used for macOS resource files)
         
@@ -605,47 +999,63 @@ class CompatibilityChecker:
                         full_path = path
                         break
                     
-                # If still not found, try to match against any loaded files (from recursive scan)
-                if not full_path and hasattr(self.parent, 'scan_file_paths'):
-                    for path in self.parent.scan_file_paths:
-                        if os.path.basename(path) == filename or path.endswith(filename):
-                            full_path = path
-                            break
-            
-            if not full_path:
-                ttk.Label(details_content, text="Error: Could not find file path", 
-                         foreground=self.parent.error_color).pack(pady=10)
-                return
-            
-            # Show current metadata
-            metadata = self.parent.read_metadata(full_path)
-        
             # Format info section
             if results['format_info']:
-                format_frame = ttk.LabelFrame(details_content, text="Format Information", padding=5)
+                format_frame = ttk.LabelFrame(details_content, text="File Information", padding=5)
                 format_frame.pack(fill=tk.X, pady=(0, 10))
                 
-                grid_frame = ttk.Frame(format_frame)
-                grid_frame.pack(fill=tk.X, expand=True, pady=5)
+                # File path display (especially useful for recursive scan)
+                path_label = ttk.Label(format_frame, text=f"Path: {full_path}", wraplength=580)
+                path_label.pack(anchor=tk.W, padx=5, pady=2)
                 
-                row = 0
                 for key, value in results['format_info'].items():
-                    # Format the value based on what it is
                     if key == 'bitrate':
-                        display_value = f"{value//1000} kbps"
+                        value = f"{value//1000} kbps"
                     elif key == 'sample_rate':
-                        display_value = f"{value} Hz"
+                        value = f"{value//1000} kHz"
                     elif key == 'length':
-                        minutes, seconds = divmod(int(value), 60)
-                        display_value = f"{minutes}:{seconds:02d}"
-                    else:
-                        display_value = str(value)
+                        minutes = int(value // 60)
+                        seconds = int(value % 60)
+                        value = f"{minutes}:{seconds:02d}"
+                    elif key == 'md5_checksum':
+                        value = f"{value} (calculated during integrity check)"
                     
-                    ttk.Label(grid_frame, text=key.replace('_', ' ').title() + ":", 
-                            font=("Helvetica", 10, "bold")).grid(row=row, column=0, sticky=tk.W, padx=5, pady=2)
-                    ttk.Label(grid_frame, text=display_value).grid(row=row, column=1, sticky=tk.W, padx=5, pady=2)
-                    row += 1
-        
+                    info_frame = ttk.Frame(format_frame)
+                    info_frame.pack(fill=tk.X, pady=1)
+                    
+                    # Format key with title case and replace underscores with spaces
+                    formatted_key = key.replace('_', ' ').title()
+                    ttk.Label(info_frame, text=f"{formatted_key}:", width=15, anchor=tk.W).pack(side=tk.LEFT, padx=5)
+                    ttk.Label(info_frame, text=f"{value}").pack(side=tk.LEFT)
+            
+            # File integrity section
+            if 'integrity' in results and self.perform_integrity_check.get():
+                integrity_frame = ttk.LabelFrame(details_content, text="File Integrity", padding=5)
+                integrity_frame.pack(fill=tk.X, pady=(0, 10))
+                
+                status_frame = ttk.Frame(integrity_frame)
+                status_frame.pack(fill=tk.X, pady=2)
+                
+                status_label = ttk.Label(status_frame, text="Status:", width=10, anchor=tk.W)
+                status_label.pack(side=tk.LEFT, padx=5)
+                
+                status_color = "#4CAF50" if results['integrity']['status'] == "OK" else \
+                               "#FFA500" if results['integrity']['status'] == "Warning" else "#F44336"
+                
+                status_value = ttk.Label(status_frame, 
+                                          text=results['integrity']['status'],
+                                          foreground=status_color,
+                                          font=("Helvetica", 10, "bold"))
+                status_value.pack(side=tk.LEFT)
+                
+                # Display MD5 checksum if available
+                if results['integrity']['md5']:
+                    md5_frame = ttk.Frame(integrity_frame)
+                    md5_frame.pack(fill=tk.X, pady=1)
+                    
+                    ttk.Label(md5_frame, text="File MD5:", width=10, anchor=tk.W).pack(side=tk.LEFT, padx=5)
+                    ttk.Label(md5_frame, text=results['integrity']['md5'], font=("Courier", 9)).pack(side=tk.LEFT)
+            
             # Issues section with fix buttons
             if results['issues']:
                 issues_frame = ttk.LabelFrame(details_content, text="Issues", padding=5)

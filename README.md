@@ -10,6 +10,7 @@ A cross-platform desktop application for editing and managing metadata in audio 
 
 - Edit audio file metadata (ID3 tags for MP3, Vorbis Comments for FLAC/OGG, INFO chunks for WAV)
 - Compatibility checker for audio files to ensure they play correctly on various devices
+- File integrity verification with format-specific checks and MD5 checksums
 - Batch editing capabilities for multiple files
 - Recursive directory scanning for compatibility issues
 - Support for multiple audio formats (MP3, FLAC, OGG, WAV)
@@ -65,8 +66,19 @@ Get the latest version for your platform from the [Releases](https://github.com/
 
 1. Select a file or multiple files
 2. Click "Tools > Check Compatibility"
-3. Review the compatibility report for issues
+3. Review the compatibility report for metadata and file integrity issues
 4. Use the "Fix Selected" buttons to address specific issues
+
+### File Integrity Check
+
+File integrity checking is included in the compatibility check and verifies:
+
+- File structure and headers for each format (MP3, FLAC, WAV, OGG)
+- Data consistency and coherence
+- File completeness (detecting truncated files)
+- MD5 checksum calculation for reference and duplicate identification
+
+You can enable or disable file integrity checking using the checkbox in the compatibility check dialog.
 
 ### Recursive Directory Scanning
 

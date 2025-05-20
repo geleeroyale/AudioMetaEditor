@@ -333,14 +333,42 @@ Version 1.0"""
         browse_btn = ttk.Button(browser_top_frame, text="Browse...", command=self.browse_directory)
         browse_btn.pack(side=tk.RIGHT)
         
-        # Add scan directory button below the browse button
-        scan_frame = ttk.Frame(browser_frame)
-        scan_frame.pack(fill=tk.X, pady=(0, 5), padx=5)
+        # Toolbar in the file browser section
+        toolbar_frame = ttk.Frame(browser_frame)
+        toolbar_frame.pack(fill=tk.X, pady=(0, 5), padx=5)
         
-        scan_dir_btn = ttk.Button(scan_frame, text="Scan Directory Recursively", 
+        # Initialize the integrity check boolean variable in the compatibility checker
+        if not hasattr(self.compatibility_checker, 'perform_integrity_check'):
+            self.compatibility_checker.perform_integrity_check = tk.BooleanVar(value=False)
+        
+        # Create a row for buttons
+        button_row1 = ttk.Frame(toolbar_frame)
+        button_row1.pack(fill=tk.X, pady=(0, 2))
+        
+        # Create a second row for more buttons and the checkbox
+        button_row2 = ttk.Frame(toolbar_frame)
+        button_row2.pack(fill=tk.X, pady=(2, 0))
+        
+        # Add Check Selected button
+        check_button = ttk.Button(button_row1, text="Check Selected", command=self.check_compatibility,
+                             style="Accent.TButton", width=15)
+        check_button.pack(side=tk.LEFT, padx=2, pady=2)
+        
+        # Add Delete Selected button
+        delete_button = ttk.Button(button_row1, text="Delete Selected", command=self.delete_selected_files,
+                             style="Secondary.TButton", width=15)
+        delete_button.pack(side=tk.LEFT, padx=2, pady=2)
+        
+        # Add Scan Directory Recursively button
+        scan_dir_btn = ttk.Button(button_row2, text="Scan Directory Recursively", 
                                command=self.scan_directory_recursively, 
-                               style="Secondary.TButton")
-        scan_dir_btn.pack(side=tk.RIGHT)
+                               style="Secondary.TButton", width=25)
+        scan_dir_btn.pack(side=tk.LEFT, padx=2, pady=2)
+        
+        # Add file integrity checkbox
+        integrity_check = ttk.Checkbutton(button_row2, text="Enable File Integrity Check", 
+                                       variable=self.compatibility_checker.perform_integrity_check)
+        integrity_check.pack(side=tk.LEFT, padx=(10, 2), pady=2)
         
         # File list with scrollbar
         file_frame = ttk.Frame(browser_frame)
@@ -357,11 +385,7 @@ Version 1.0"""
                                        style="Field.TCheckbutton")
         select_all_cb.pack(side=tk.LEFT, padx=5)
         
-        # Delete button for quick access
-        delete_btn = ttk.Button(select_all_frame, text="Delete Selected", 
-                              command=self.delete_selected_files,
-                              style="Secondary.TButton")
-        delete_btn.pack(side=tk.RIGHT, padx=5)
+        # Removed Delete button since it's now in the toolbar
         
         # Define columns: Checkbox, Filename, Format, Duration
         columns = ("checked", "filename", "format", "duration")
@@ -528,13 +552,9 @@ Version 1.0"""
         revert_btn = ttk.Button(btn_frame, text="Revert Changes", command=self.load_metadata, style="Secondary.TButton")
         revert_btn.pack(side=tk.LEFT, padx=6, pady=3)
         
-        # Compatibility check button in edit view
-        check_comp_btn = ttk.Button(btn_frame, text="Check Selected", command=self.check_compatibility, style="Secondary.TButton")
-        check_comp_btn.pack(side=tk.RIGHT, padx=6, pady=3)
-        
         # Auto-fix button (initially hidden, shown after compatibility check)
-        self.auto_fix_btn = ttk.Button(btn_frame, text="Auto-Fix Issues", command=self.auto_fix_compatibility, style="Secondary.TButton")
-        self.auto_fix_btn.pack(side=tk.RIGHT, padx=(0,6), pady=3)
+        self.auto_fix_btn = ttk.Button(btn_frame, text="Auto-Fix Issues", command=self.auto_fix_compatibility, style="Accent.TButton")
+        self.auto_fix_btn.pack(side=tk.RIGHT, padx=6, pady=3)
         self.auto_fix_btn.pack_forget()  # Initially hidden
         
         # Status bar at bottom
@@ -945,13 +965,14 @@ Version 1.0"""
         self.load_directory(self.current_dir)
     
     def auto_fix_compatibility(self):
-        """Automatically fix common compatibility issues"""
+        """Automatically fix common compatibility issues and file integrity problems"""
         if not hasattr(self, 'last_report_data') or not self.last_report_data:
             messagebox.showinfo("No Issues", "Please run a compatibility check first.")
             return
         
         fixed_count = 0
         skipped_count = 0
+        integrity_fixed_count = 0
         
         for filename, results in self.last_report_data:
             full_path = None
@@ -971,6 +992,7 @@ Version 1.0"""
                 continue
                 
             updates_made = False
+            integrity_fixed = False
             
             # Check for macOS resource files to delete
             if 'macOS resource file detected' in results['issues']:
@@ -988,6 +1010,25 @@ Version 1.0"""
                                       f"Could not delete file {os.path.basename(full_path)}:\n{str(e)}")
                     skipped_count += 1
                     continue  # Skip to next file
+            
+            # Check for file integrity issues
+            if self.compatibility_checker.perform_integrity_check.get() and 'integrity' in results:
+                integrity_result = results['integrity']
+                if integrity_result['status'] != "OK" and integrity_result.get('can_repair', False):
+                    # Found repairable integrity issue
+                    try:
+                        repair_result = self.compatibility_checker.repair_file_integrity(full_path, integrity_result)
+                        if repair_result.get('success', False):
+                            messagebox.showinfo("Integrity Repair", 
+                                             f"Successfully repaired file integrity for:\n{os.path.basename(full_path)}\n\nDetails: {repair_result.get('message', '')}")
+                            integrity_fixed = True
+                            integrity_fixed_count += 1
+                        else:
+                            messagebox.showwarning("Repair Failed", 
+                                               f"Could not repair integrity of:\n{os.path.basename(full_path)}\n\nReason: {repair_result.get('message', 'Unknown error')}")
+                    except Exception as e:
+                        messagebox.showerror("Repair Error", 
+                                          f"Error repairing file {os.path.basename(full_path)}:\n{str(e)}")
             
             # Auto-fix common issues
             if 'Missing title tag' in results['issues'] and os.path.basename(full_path):
@@ -1015,11 +1056,15 @@ Version 1.0"""
                     fixed_count += 1
                 else:
                     skipped_count += 1
+            elif integrity_fixed:
+                # If only integrity was fixed, count as fixed
+                fixed_count += 1
         
         # Show results
         if fixed_count > 0:
+            integrity_msg = f" (including {integrity_fixed_count} with integrity issues)" if integrity_fixed_count > 0 else ""
             messagebox.showinfo("Auto-Fix Complete", 
-                              f"Successfully fixed {fixed_count} files. {skipped_count} files could not be fixed automatically.")
+                              f"Successfully fixed {fixed_count} files{integrity_msg}. {skipped_count} files could not be fixed automatically.")
             # Refresh current file if it was modified
             if self.current_file:
                 self.load_metadata()
