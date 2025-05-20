@@ -4,6 +4,8 @@ A cross-platform desktop application for editing and managing metadata in audio 
 
 ![Audio Metadata Editor Screenshot](screenshot.png)
 
+[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/P5P81FA6UA)
+
 ## Features
 
 - Edit audio file metadata (ID3 tags for MP3, Vorbis Comments for FLAC/OGG, INFO chunks for WAV)
@@ -11,7 +13,7 @@ A cross-platform desktop application for editing and managing metadata in audio 
 - Batch editing capabilities for multiple files
 - Recursive directory scanning for compatibility issues
 - Support for multiple audio formats (MP3, FLAC, OGG, WAV)
-- Clean up macOS resource files (._* files)
+- Clean up macOS resource files (.\_\* files)
 - User-friendly interface with simple controls
 
 ## Download
@@ -25,16 +27,19 @@ Get the latest version for your platform from the [Releases](https://github.com/
 ## Installation
 
 ### Windows
+
 - Download the `.exe` file from the Releases page
 - Double-click to run the application (no installation required)
 
 ### macOS
+
 - Download the `.app.zip` file
 - Unzip the file
 - Move the `.app` file to your Applications folder
 - Right-click the app and select "Open" (required for the first run due to macOS security)
 
 ### Linux
+
 - Download the `.zip` file
 - Extract the contents
 - Open a terminal in the extracted directory
@@ -72,7 +77,7 @@ Get the latest version for your platform from the [Releases](https://github.com/
 ### Cleanup macOS Resource Files
 
 1. Click "Tools > Delete macOS Resource Files"
-2. Select a directory containing resource files (._*)
+2. Select a directory containing resource files (.\_\*)
 3. Confirm the deletion when prompted
 
 ## Development
@@ -87,18 +92,21 @@ Get the latest version for your platform from the [Releases](https://github.com/
 ### Setup Development Environment
 
 1. Clone the repository
+
    ```
    git clone https://github.com/geleeroyale/AudioMetaEditor.git
    cd AudioMetaEditor
    ```
 
 2. Create a virtual environment (optional but recommended)
+
    ```
    python -m venv venv
    source venv/bin/activate  # On Windows: venv\Scripts\activate
    ```
 
 3. Install dependencies
+
    ```
    pip install mutagen
    ```
@@ -117,6 +125,7 @@ pip install pyinstaller
 ```
 
 Build commands:
+
 - Windows: `pyinstaller --onefile --windowed --icon=app_icon.ico audio_metadata_editor.py`
 - macOS: `pyinstaller --windowed --icon=app_icon.icns --target-architecture universal2 audio_metadata_editor.py`
 - Linux: `pyinstaller --onefile --windowed audio_metadata_editor.py`
@@ -130,3 +139,5 @@ Build commands:
 - [Mutagen](https://mutagen.readthedocs.io/) - Used for audio metadata handling
 - [Python](https://www.python.org/) - Programming language
 - [Tkinter](https://docs.python.org/3/library/tkinter.html) - GUI toolkit
+
+[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/P5P81FA6UA)
