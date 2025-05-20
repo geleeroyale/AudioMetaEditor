@@ -32,7 +32,7 @@ jobs:
         uses: actions/checkout@v2
 
       - name: Set up Python
-        uses: actions/setup-python@v2
+        uses: actions/setup-python@v4
         with:
           python-version: "3.8"
 
@@ -53,7 +53,7 @@ jobs:
           pyinstaller ${{ matrix.pyinstaller_args }} audio_metadata_editor.py
 
       - name: Upload executable as artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.asset_name }}
           path: ${{ matrix.executable_path }}
@@ -67,7 +67,7 @@ jobs:
         uses: actions/checkout@v2
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v2
+        uses: actions/download-artifact@v4
         with:
           path: artifacts
 
