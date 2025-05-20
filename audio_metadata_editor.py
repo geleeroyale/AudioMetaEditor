@@ -38,6 +38,9 @@ from mutagen.id3 import ID3, TIT2, TPE1, TALB, TDRC, TCON, COMM
 from mutagen.wave import WAVE
 from mutagen.mp3 import MP3
 
+# Import compatibility checker
+from compatibility_checker import CompatibilityChecker
+
 class AudioMetadataEditor(tk.Tk):
     def __init__(self):
         super().__init__()
@@ -45,6 +48,18 @@ class AudioMetadataEditor(tk.Tk):
         # App configuration
         self.title("Audio Metadata Editor")
         self.geometry("1000x700")
+        self.minsize(800, 600)
+        
+        # Initialize variables
+        self.current_dir = os.path.expanduser("~")  # Start in user's home directory
+        self.status_var = tk.StringVar(value="Ready")  # Status bar text
+        self.current_file = None  # Currently selected file
+        self.checked_files_state = {}  # Track checked state of files
+        self.supported_formats = ['.mp3', '.flac', '.wav', '.aaf']  # Supported audio formats
+        self.last_report_data = []  # Store last compatibility check results
+        
+        # Initialize compatibility checker
+        self.compatibility_checker = CompatibilityChecker(self)
 
         try:
             # Attempt to set application icon
@@ -113,10 +128,6 @@ class AudioMetadataEditor(tk.Tk):
         # Bind events
         self.bind("<Control-o>", lambda e: self.browse_directory())
         self.bind("<Control-s>", lambda e: self.save_metadata())
-        
-        # Status bar
-        status_bar = ttk.Label(self, textvariable=self.status_var, anchor=tk.W, style="Status.TLabel")
-        status_bar.pack(side=tk.BOTTOM, fill=tk.X)
     
     def configure_modern_style(self):
         # Use the class color attributes (defined in __init__) for consistent styling
@@ -222,32 +233,48 @@ class AudioMetadataEditor(tk.Tk):
     def create_menu(self):
         """Create the application menu"""
         menubar = tk.Menu(self)
-        
         # File menu
         file_menu = tk.Menu(menubar, tearoff=0)
         file_menu.add_command(label="Open Directory...", command=self.browse_directory, accelerator="Ctrl+O")
-        file_menu.add_command(label="Save Metadata", command=self.save_metadata, accelerator="Ctrl+S")
         file_menu.add_separator()
         file_menu.add_command(label="Exit", command=self.quit)
         menubar.add_cascade(label="File", menu=file_menu)
         
-        # Tools menu - we'll keep the structure in place for future tool additions
+        # Tools menu
         tools_menu = tk.Menu(menubar, tearoff=0)
-        self.tools_menu = tools_menu
-        # Batch editing is now integrated directly in the main interface
         
-        # Only add the Tools menu if it contains items
-        if tools_menu.index(tk.END) is not None:
-            menubar.add_cascade(label="Tools", menu=self.tools_menu)
+        # Add Profile submenu
+        profile_menu = tk.Menu(tools_menu, tearoff=0)
+        profile_menu.add_command(label="Check Generic Strict Compatibility", command=self.check_compatibility)
+        tools_menu.add_cascade(label="Profile", menu=profile_menu)
         
-        # Help menu
-        help_menu = tk.Menu(menubar, tearoff=0)
-        help_menu.add_command(label="About", command=self.show_about)
-        menubar.add_cascade(label="Help", menu=help_menu)
+        tools_menu.add_separator()
+        tools_menu.add_command(label="About", command=self.show_about)
+        menubar.add_cascade(label="Tools", menu=tools_menu)
         
+        # Set the menu to the window
         self.config(menu=menubar)
-        self.update_batch_edit_menu_state() # Initial state update
+        
+        # Key bindings
+        self.bind("<Control-o>", lambda event: self.browse_directory())
+        
+        # Store menu references
+        self.menubar = menubar
+        self.file_menu = file_menu
+        self.tools_menu = tools_menu
+        self.profile_menu = profile_menu
     
+    # Show about dialog
+    def show_about(self):
+        about_text = """Audio Metadata Editor
+
+A simple tool for editing metadata in audio files.
+
+Supported formats: MP3, FLAC, WAV
+
+Version 1.0"""
+        messagebox.showinfo("About", about_text)
+        
     def create_layout(self):
         """Create the main application layout"""
         # Main container
@@ -278,9 +305,20 @@ class AudioMetadataEditor(tk.Tk):
         file_frame = ttk.Frame(browser_frame)
         file_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
+        # Select All checkbox
+        select_all_frame = ttk.Frame(file_frame)
+        select_all_frame.pack(fill=tk.X, pady=(0, 5))
+        
+        self.select_all_var = tk.BooleanVar(value=False)
+        select_all_cb = ttk.Checkbutton(select_all_frame, text="Select All", 
+                                       variable=self.select_all_var, 
+                                       command=self.toggle_select_all,
+                                       style="Field.TCheckbutton")
+        select_all_cb.pack(side=tk.LEFT, padx=5)
+        
         # Define columns: Checkbox, Filename, Format, Duration
         columns = ("checked", "filename", "format", "duration")
-        self.file_tree = ttk.Treeview(file_frame, columns=columns, show="headings", selectmode="browse") # selectmode browse for single active row
+        self.file_tree = ttk.Treeview(file_frame, columns=columns, show="headings", selectmode="browse") 
         
         scrollbar = ttk.Scrollbar(file_frame, orient="vertical", command=self.file_tree.yview)
         self.file_tree.configure(yscrollcommand=scrollbar.set)
@@ -303,7 +341,6 @@ class AudioMetadataEditor(tk.Tk):
         
         # Right panel - metadata editor
         metadata_frame = ttk.LabelFrame(main_frame, text="Metadata Editor")
-        # Use pack for metadata_frame as browser_frame (its sibling in main_frame) uses pack.
         metadata_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=10, pady=5)
         
         # Split into file info and editable metadata
@@ -312,9 +349,9 @@ class AudioMetadataEditor(tk.Tk):
         metadata_frame.rowconfigure(1, weight=1)  # Editable metadata
         
         # Style specifically for the ScrolledText widget (Comment field)
-        self.option_add("*Text*Background", self.field_bg_color)  # Dark background
-        self.option_add("*Text*foreground", self.fg_color)  # Light text
-        self.option_add("*Text*insertBackground", self.accent_color)  # Teal cursor
+        self.option_add("*Text*Background", self.field_bg_color)  # Set background
+        self.option_add("*Text*foreground", self.fg_color)  # Set text color
+        self.option_add("*Text*insertBackground", self.accent_color)  # Cursor color
         
         # File information panel
         info_frame = ttk.LabelFrame(metadata_frame, text="File Information")
@@ -367,7 +404,7 @@ class AudioMetadataEditor(tk.Tk):
         # Metadata field checkboxes (for batch editing)
         self.batch_field_vars = {}
         
-        # Create a special style for field checkboxes to make them more prominent
+        # Create a special style for field checkboxes
         self.style.configure("Field.TCheckbutton", 
                            background=self.field_bg_color,
                            foreground=self.fg_color,
@@ -426,7 +463,6 @@ class AudioMetadataEditor(tk.Tk):
         comment_checkbox.grid(row=5, column=0, padx=(0,6), sticky=tk.N)
         
         ttk.Label(form_frame, text="Comment:", style="Header.TLabel").grid(row=5, column=1, sticky=tk.NW, pady=8)
-        self.comment_var = tk.StringVar()
         self.comment_text = ScrolledText(form_frame, height=5, width=30, relief=tk.SOLID, borderwidth=1)
         self.comment_text.grid(row=5, column=2, sticky=tk.EW, pady=8, padx=10)
         
@@ -445,11 +481,20 @@ class AudioMetadataEditor(tk.Tk):
         revert_btn = ttk.Button(btn_frame, text="Revert Changes", command=self.load_metadata, style="Secondary.TButton")
         revert_btn.pack(side=tk.LEFT, padx=6, pady=3)
         
-        # Batch apply button (only visible when files are checked)
-        self.batch_apply_btn = ttk.Button(btn_frame, text="Apply to Checked Files", command=self.apply_batch_changes, style="Accent.TButton")
-        self.batch_apply_btn.pack(side=tk.RIGHT, padx=6, pady=3)
-        self.batch_apply_btn.pack_forget()  # Initially hidden
+        # Compatibility check button in edit view
+        check_comp_btn = ttk.Button(btn_frame, text="Check Compatibility", command=self.check_compatibility, style="Secondary.TButton")
+        check_comp_btn.pack(side=tk.RIGHT, padx=6, pady=3)
+        
+        # Auto-fix button (initially hidden, shown after compatibility check)
+        self.auto_fix_btn = ttk.Button(btn_frame, text="Auto-Fix Issues", command=self.auto_fix_compatibility, style="Secondary.TButton")
+        self.auto_fix_btn.pack(side=tk.RIGHT, padx=(0,6), pady=3)
+        self.auto_fix_btn.pack_forget()  # Initially hidden
+        
+        # Status bar at bottom
+        status_bar = ttk.Label(self, textvariable=self.status_var, style="Status.TLabel")
+        status_bar.pack(side=tk.BOTTOM, fill=tk.X)
     
+    # Browse for directory containing audio files
     def browse_directory(self):
         """Open directory browser dialog and load audio files"""
         # Use suppress_stderr on macOS to avoid NSOpenPanel warning
@@ -464,6 +509,7 @@ class AudioMetadataEditor(tk.Tk):
             self.dir_var.set(dir_path)
             self.load_directory(dir_path)
     
+    # Load all audio files from directory
     def load_directory(self, dir_path):
         """Load all audio files from the specified directory"""
         self.status_var.set(f"Loading files from {dir_path}...")
@@ -471,40 +517,62 @@ class AudioMetadataEditor(tk.Tk):
         
         # Clear current file list
         self.file_tree.delete(*self.file_tree.get_children())
-        self.files_list = []
+        self.file_list = []
         
         try:
             # Find all audio files in the directory
+            supported_formats = ['.mp3', '.flac', '.wav', '.aaf']
             for filename in os.listdir(dir_path):
                 file_path = os.path.join(dir_path, filename)
                 if os.path.isfile(file_path):
                     file_ext = os.path.splitext(filename)[1].lower()
-                    if file_ext in self.supported_formats:
-                        self.files_list.append(file_path)
+                    if file_ext in supported_formats:
+                        self.file_list.append(file_path)
             
             # Sort files alphabetically
-            self.files_list.sort(key=lambda x: os.path.basename(x).lower())
+            self.file_list.sort(key=lambda x: os.path.basename(x).lower())
             
-            self.populate_file_tree(self.files_list)
+            self.populate_file_tree(self.file_list)
             
-            num_files = len(self.files_list)
+            num_files = len(self.file_list)
             self.status_var.set(f"Loaded {num_files} audio file{'s' if num_files != 1 else ''}")
             
         except Exception as e:
             messagebox.showerror("Error", f"Error loading directory: {str(e)}")
             self.status_var.set("Error loading directory")
     
+    # Toggle select all files
+    def toggle_select_all(self):
+        """Toggle selection of all files in the list"""
+        select_all = self.select_all_var.get()
+        checked_symbol = "[✔]" if select_all else "[ ]"
+        
+        # Update all checked states
+        for file_path in self.checked_files_state.keys():
+            self.checked_files_state[file_path] = select_all
+            
+            # Update visual checkbox
+            current_values = list(self.file_tree.item(file_path, 'values'))
+            current_values[0] = checked_symbol
+            self.file_tree.item(file_path, values=tuple(current_values))
+        
+        # Update UI based on selection
+        self.update_ui_for_batch()
+    
+    # Populate file tree with audio files
     def populate_file_tree(self, files):
+        """Populate the file tree with the list of audio files"""
         self.file_tree.delete(*self.file_tree.get_children())
-        self.files_list = files
-        self.checked_files_state.clear()
-        checked_symbol = "[✔]" # Or 
-        unchecked_symbol = "[ ]" # Or 
-
+        self.file_list = files
+        self.checked_files_state = {}
+        
+        checked_symbol = "[ ]"  # Unchecked by default
+        
         for file_path in files:
-            self.checked_files_state[file_path] = False # Initialize as unchecked
+            self.checked_files_state[file_path] = False  # Initialize as unchecked
             display_name = os.path.basename(file_path)
             fmt, dur = "N/A", "-"
+            
             try:
                 metadata = self.read_metadata(file_path)
                 if metadata.get('error') and not metadata.get('format'):
@@ -523,19 +591,131 @@ class AudioMetadataEditor(tk.Tk):
             
             # Values: checked_status, filename, format, duration
             self.file_tree.insert("", tk.END, iid=file_path, 
-                                  values=(unchecked_symbol, display_name, fmt, dur))
+                                  values=(checked_symbol, display_name, fmt, dur))
         
-        self.update_batch_edit_menu_state()
+        # Reset select all checkbox
+        if hasattr(self, 'select_all_var'):
+            self.select_all_var.set(False)
+            
+        # Update status 
         if files:
             self.status_var.set(f"Loaded {len(files)} files.")
         else:
             self.status_var.set("No audio files found in the selected directory.")
     
-    def update_batch_edit_menu_state(self):
-        """This method is kept for backward compatibility but no longer needed"""
-        # No menu item to update anymore as batch editing is now integrated in the main interface
-        pass
-
+    # Check compatibility of files against the Generic Strict Profile
+    def check_compatibility(self):
+        """Check selected files against the Generic Strict Profile for compatibility"""
+        # Check if any files are selected or checked
+        selected_item = self.file_tree.selection()
+        checked_files = [fp for fp, checked in self.checked_files_state.items() if checked]
+        
+        if not selected_item and not checked_files:
+            messagebox.showinfo("No Files Selected", "Please select or check at least one file to check compatibility.")
+            return
+        
+        files_to_check = []
+        
+        # Process selected or checked files
+        if checked_files:
+            # Process all checked files
+            files_to_check = checked_files
+        elif selected_item:
+            # Process only the selected file
+            file_path = selected_item[0]  # The iid is the file path
+            files_to_check = [file_path]
+        
+        # Run the compatibility check
+        self.status_var.set("Checking file compatibility...")
+        self.update_idletasks()
+        
+        # Use the compatibility checker to validate files
+        self.last_report_data, total_issues = self.compatibility_checker.check_compatibility(
+            files_to_check, self.read_metadata)
+        
+        # Show Auto-Fix button if issues were found
+        if total_issues > 0:
+            self.auto_fix_btn.pack(side=tk.RIGHT, padx=(0,6), pady=3)
+        else:
+            self.auto_fix_btn.pack_forget()
+        
+        # Show the compatibility report
+        self.compatibility_checker.show_compatibility_report(self.last_report_data, total_issues)
+    
+    # Auto-fix compatibility issues
+    def auto_fix_compatibility(self):
+        """Automatically fix common compatibility issues"""
+        if not hasattr(self, 'last_report_data') or not self.last_report_data:
+            messagebox.showinfo("No Issues", "Please run a compatibility check first.")
+            return
+        
+        fixed_count = 0
+        skipped_count = 0
+        
+        for filename, results in self.last_report_data:
+            full_path = None
+            # Find the full path from the filename
+            for path in self.checked_files_state.keys():
+                if os.path.basename(path) == filename:
+                    full_path = path
+                    break
+            
+            if not full_path:
+                continue
+                
+            # Get current metadata
+            metadata = self.read_metadata(full_path)
+            if 'error' in metadata:
+                skipped_count += 1
+                continue
+                
+            updates_made = False
+            
+            # Auto-fix common issues
+            if 'Missing title tag' in results['issues'] and os.path.basename(full_path):
+                # Use filename (without extension) as title
+                base_name = os.path.splitext(os.path.basename(full_path))[0]
+                metadata['title'] = base_name
+                updates_made = True
+                
+            if 'Missing artist tag' in results['issues']:
+                # Set a default artist name
+                metadata['artist'] = "Unknown Artist"
+                updates_made = True
+                
+            # Trim overly long tags
+            for field in ['title', 'artist', 'album']:
+                issue_text = f"{field.capitalize()} tag exceeds 250 characters"
+                if any(issue_text in issue for issue in results['issues']) and field in metadata:
+                    metadata[field] = metadata[field][:250]
+                    updates_made = True
+            
+            # Apply fixes if any were made
+            if updates_made:
+                result = self.write_metadata(full_path, metadata)
+                if result.get('success', False):
+                    fixed_count += 1
+                else:
+                    skipped_count += 1
+        
+        # Show results
+        if fixed_count > 0:
+            messagebox.showinfo("Auto-Fix Complete", 
+                              f"Successfully fixed {fixed_count} files. {skipped_count} files could not be fixed automatically.")
+            # Refresh current file if it was modified
+            if self.current_file:
+                self.load_metadata()
+            # Reload directory to update file list
+            if self.current_dir:
+                self.load_directory(self.current_dir)
+        else:
+            messagebox.showinfo("Auto-Fix Complete", 
+                              "No files could be automatically fixed. Some issues require manual editing.")
+        
+        # Hide auto-fix button until next compatibility check
+        self.auto_fix_btn.pack_forget()
+    
+    # Handle click on the file_tree Treeview
     def on_tree_click(self, event):
         """Handle click on the file_tree Treeview - either check/uncheck or select file"""
         region = self.file_tree.identify_region(event.x, event.y)
@@ -544,7 +724,7 @@ class AudioMetadataEditor(tk.Tk):
             item_id = self.file_tree.identify_row(event.y)
             column_id = self.file_tree.identify_column(event.x)
             column_index = int(column_id.replace('#', '')) - 1
-            columns = self.file_tree.cget("columns")
+            
         item_id = self.file_tree.identify_row(event.y) # This is the iid (file_path)
 
         if not item_id: # Click outside of any item
@@ -564,21 +744,21 @@ class AudioMetadataEditor(tk.Tk):
             current_values[0] = symbol_to_set
             self.file_tree.item(item_id, values=tuple(current_values))
             
-            self.update_batch_edit_menu_state()
+            self.update_ui_for_batch()
         
         # Always treat a click on a row (even checkbox) as a selection for metadata display
-        # This simplifies logic from <<TreeviewSelect>> which is harder with checkboxes
-        if item_id != self.current_file:
+        if item_id != getattr(self, 'current_file', None):
             self.current_file = item_id
             self.load_metadata()
         
-        # Ensure the clicked row gets focus/selection highlight if desired by selectmode
+        # Ensure the clicked row gets focus/selection highlight
         if self.file_tree.selection() != (item_id,):
              self.file_tree.selection_set(item_id)
-
+    
+    # Load metadata from selected file
     def load_metadata(self):
         """Load metadata from the selected audio file"""
-        if not self.current_file:
+        if not hasattr(self, 'current_file') or not self.current_file:
             return
         
         try:
@@ -631,6 +811,7 @@ class AudioMetadataEditor(tk.Tk):
             messagebox.showerror("Error", f"Error loading metadata: {str(e)}")
             self.status_var.set("Error loading metadata")
     
+    # Save metadata changes to file(s)
     def save_metadata(self):
         """Save metadata changes to the audio file or multiple checked files"""
         # Check if we're in batch mode (multiple files checked + at least one batch field checkbox checked)
@@ -643,7 +824,7 @@ class AudioMetadataEditor(tk.Tk):
             return
         
         # Regular single file edit
-        if not self.current_file:
+        if not hasattr(self, 'current_file') or not self.current_file:
             messagebox.showinfo("Info", "No file selected")
             return
         
@@ -667,7 +848,8 @@ class AudioMetadataEditor(tk.Tk):
             if result.get('success', False):
                 self.status_var.set(f"Metadata saved to {os.path.basename(self.current_file)}")
                 # Update current metadata
-                self.current_metadata.update(metadata)
+                if hasattr(self, 'current_metadata'):
+                    self.current_metadata.update(metadata)
                 
                 # If this file was the only checked file and batch fields were selected,
                 # reset the batch field checkboxes
@@ -684,28 +866,28 @@ class AudioMetadataEditor(tk.Tk):
             messagebox.showerror("Error", f"Error saving metadata: {str(e)}")
             self.status_var.set("Error saving metadata")
     
+    # Update UI for batch editing
     def update_ui_for_batch(self):
         """Update UI to show or hide batch editing controls based on file selection state"""
         checked_files = [fp for fp, checked in self.checked_files_state.items() if checked]
-        files_checked = len(checked_files) > 0
+        batch_fields_checked = any(var.get() for var in self.batch_field_vars.values())
         
-        # Update batch apply button visibility
-        if files_checked:
-            self.batch_apply_btn.pack(side=tk.RIGHT, padx=5)  # Show button
-            
-            # Update Save button text to show number of files
-            if len(checked_files) > 1 and any(var.get() for var in self.batch_field_vars.values()):
-                self.save_btn_text.set(f"Save Changes ({len(checked_files)} files)")
-            else:
-                self.save_btn_text.set("Save Changes")
+        # Always update Save button text to show number of files
+        if checked_files and batch_fields_checked:
+            self.save_btn_text.set(f"Save Changes ({len(checked_files)} files)")
         else:
-            self.batch_apply_btn.pack_forget()  # Hide button
-            self.save_btn_text.set("Save Changes")  # Reset save button text
+            self.save_btn_text.set("Save Changes")
             
-            # Reset all field checkboxes
+        # Handle select all checkbox state
+        if not checked_files:
+            # If no files checked, reset all field checkboxes
             for var in self.batch_field_vars.values():
                 var.set(False)
+            # Update select all checkbox
+            if hasattr(self, 'select_all_var'):
+                self.select_all_var.set(False)
     
+    # Apply batch changes to multiple files
     def apply_batch_changes(self):
         """Apply changes from the main form to all checked files"""
         files_to_process = [fp for fp, checked in self.checked_files_state.items() if checked]
@@ -722,7 +904,7 @@ class AudioMetadataEditor(tk.Tk):
             
         # Confirm with user
         if not messagebox.askyesno("Confirm Batch Update", 
-                               f"This will modify metadata for {len(files_to_process)} selected file(s) based on the ticked fields. Continue?"):
+                              f"This will modify metadata for {len(files_to_process)} selected file(s) based on the ticked fields. Continue?"):
             return
             
         self.status_var.set(f"Batch updating {len(files_to_process)} files...")
@@ -755,7 +937,7 @@ class AudioMetadataEditor(tk.Tk):
             for file_path in files_to_process:
                 try:
                     current_metadata = self.read_metadata(file_path)
-                    if 'error' in current_metadata and not file_path: # If read error, report it unless it's expected
+                    if 'error' in current_metadata: # If read error, report it
                        failed_files_details.append((os.path.basename(file_path), f"Initial read failed: {current_metadata['error']}"))
                        continue
                        
@@ -778,7 +960,7 @@ class AudioMetadataEditor(tk.Tk):
             if failed_files_details:
                 error_msg = "\n".join([f"{name}: {error}" for name, error in failed_files_details])
                 messagebox.showerror("Batch Update Results", 
-                                 f"Updated {success_count} of {len(files_to_process)} files.\n\nErrors:\n{error_msg}")
+                                f"Updated {success_count} of {len(files_to_process)} files.\n\nErrors:\n{error_msg}")
             else:
                 messagebox.showinfo("Batch Update Complete", f"Successfully updated metadata for {success_count} files.")
             
@@ -791,174 +973,6 @@ class AudioMetadataEditor(tk.Tk):
         
         # Start processing thread
         threading.Thread(target=_process_batch, daemon=True).start()
-    
-    def batch_edit(self):
-        """Legacy batch edit function kept for backward compatibility"""
-        # This redirects any possible external calls to the batch_edit method
-        # to the new apply_batch_changes method
-        self.apply_batch_changes()
-
-        # Create batch edit dialog
-        dialog = tk.Toplevel(self)
-        dialog.title(f"Batch Edit Metadata ({len(files_to_process)} files)")
-        dialog.geometry("600x450") # Increased height to ensure buttons are visible
-        dialog.transient(self)
-        dialog.grab_set()
-        dialog.resizable(False, False)
-        
-        # Configure grid layout for the dialog itself
-        dialog.columnconfigure(0, weight=1)
-        dialog.rowconfigure(0, weight=0)  # Instructional Label
-        dialog.rowconfigure(1, weight=1)  # Main form frame (for fields, should expand)
-        dialog.rowconfigure(2, weight=0)  # Button frame
-
-        # Dialog content
-        info_label = ttk.Label(dialog, text="Tick fields to update and enter new values:")
-        info_label.grid(row=0, column=0, sticky=tk.W, padx=10, pady=(10, 5))
-        
-        batch_vars = {}
-        fields_config = [
-            ('title', 'Title'), 
-            ('artist', 'Artist'), 
-            ('album', 'Album'),
-            ('date', 'Year/Date'),
-            ('genre', 'Genre'),
-            ('comment', 'Comment')
-        ]
-        
-        # Frame for checkboxes and entries
-        main_form_frame = ttk.Frame(dialog)
-        main_form_frame.grid(row=1, column=0, sticky='nsew', padx=10, pady=5)
-
-        # Configure grid inside main_form_frame (this part was already using grid and seems fine)
-        main_form_frame.columnconfigure(0, weight=0) # Checkbox for field
-        main_form_frame.columnconfigure(1, weight=0) # Label for field
-        main_form_frame.columnconfigure(2, weight=1) # Entry for field value
-
-        entry_values = {}
-
-        for i, (field_key, field_label) in enumerate(fields_config):
-            var = tk.BooleanVar(value=False)
-            batch_vars[field_key] = var
-            ttk.Checkbutton(main_form_frame, variable=var).grid(
-                row=i, column=0, sticky=tk.W, padx=(0,2), pady=5)
-            
-            ttk.Label(main_form_frame, text=f"{field_label}:").grid(
-                row=i, column=1, sticky=tk.W, padx=(0,5), pady=5)
-            
-            if field_key == 'comment':
-                text_widget = ScrolledText(main_form_frame, height=3, width=30, relief=tk.SOLID, borderwidth=1)
-                text_widget.grid(row=i, column=2, sticky='ew', pady=5, padx=(0,5))
-                entry_values[field_key] = text_widget
-            else:
-                entry_var = tk.StringVar()
-                ttk.Entry(main_form_frame, textvariable=entry_var).grid(
-                    row=i, column=2, sticky='ew', pady=5, padx=(0,5))
-                entry_values[field_key] = entry_var
-            
-        # Button frame
-        btn_frame = ttk.Frame(dialog)
-        btn_frame.grid(row=2, column=0, sticky='ew', padx=10, pady=(10,15))
-        # Configure button frame grid to push buttons to the right
-        btn_frame.columnconfigure(0, weight=1) # Spacer to push buttons to the right
-        btn_frame.columnconfigure(1, weight=0) # Cancel button
-        btn_frame.columnconfigure(2, weight=0) # Apply button
-        
-        def on_apply():
-            fields_to_update_values = {}
-            any_field_selected = False
-            for field_key, checkbox_var in batch_vars.items():
-                if checkbox_var.get():
-                    any_field_selected = True
-                    if field_key == 'comment':
-                        value = entry_values[field_key].get(1.0, tk.END).strip()
-                    else:
-                        value = entry_values[field_key].get()
-                    fields_to_update_values[field_key] = value
-            
-            if not any_field_selected:
-                messagebox.showinfo("Info", "No fields selected to update. Please tick the checkbox next to the fields you want to change.", parent=dialog)
-                return
-            
-            if not messagebox.askyesno("Confirm Batch Update", 
-                                      f"This will modify metadata for {len(files_to_process)} selected file(s) based on the ticked fields. Continue?", parent=dialog):
-                return
-            
-            self.status_var.set(f"Batch updating {len(files_to_process)} files...")
-            self.update_idletasks()
-
-            success_count = 0
-            failed_files_details = []
-            
-            dialog.destroy() # Close dialog before starting long operation
-
-            def _process_batch():
-                nonlocal success_count, failed_files_details
-                for file_path in files_to_process:
-                    try:
-                        current_metadata = self.read_metadata(file_path)
-                        if 'error' in current_metadata and not files_to_process: # If read error, report it unless it's expected (e.g. dummy file)
-                           failed_files_details.append((os.path.basename(file_path), f"Initial read failed: {current_metadata['error']}"))
-                           continue
-
-                        metadata_to_write = current_metadata.copy()
-                        
-                        for field_key, new_value in fields_to_update_values.items():
-                            if batch_vars[field_key].get(): 
-                                metadata_to_write[field_key] = new_value
-                        
-                        result = self.write_metadata(file_path, metadata_to_write)
-                        if result.get('success', False):
-                            success_count += 1
-                        else:
-                            failed_files_details.append((os.path.basename(file_path), result.get('error', 'Unknown write error')))
-                    except Exception as e:
-                        failed_files_details.append((os.path.basename(file_path), str(e)))
-                
-                self.after(0, _show_batch_results, success_count, failed_files_details, len(files_to_process))
-
-            def _show_batch_results(s_count, f_details, total_files):
-                if f_details:
-                    error_message_parts = [f"{name}: {err}" for name, err in f_details[:10]]
-                    error_message_str = "\n".join(error_message_parts)
-                    if len(f_details) > 10:
-                        error_message_str += f"\n... and {len(f_details) - 10} more"
-                    messagebox.showwarning("Batch Edit Results", 
-                                         f"Updated {s_count} of {total_files} files.\n\nFailed files:\n{error_message_str}", parent=self)
-                else:
-                    messagebox.showinfo("Batch Edit Results", 
-                                       f"Successfully updated metadata for {s_count} file(s).", parent=self)
-                
-                self.status_var.set(f"Batch edit complete. Updated {s_count}/{total_files} files.")
-                if self.current_file in files_to_process:
-                     self.load_metadata() 
-
-            threading.Thread(target=_process_batch, daemon=True).start()
-
-        apply_btn = ttk.Button(btn_frame, text="Apply Changes to Selected Files", command=on_apply)
-        apply_btn.grid(row=0, column=2, sticky=tk.E, padx=(5,0))
-        
-        cancel_btn = ttk.Button(btn_frame, text="Cancel", command=dialog.destroy)
-        cancel_btn.grid(row=0, column=1, sticky=tk.E, padx=5)  # Place cancel button to the left of apply
-
-        dialog.protocol("WM_DELETE_WINDOW", dialog.destroy)
-        dialog.wait_window() 
-    
-    def show_about(self):
-        """Show about dialog"""
-        about_text = """Audio Metadata Editor
-
-A desktop application for editing metadata in audio files.
-
-Supported formats:
-- FLAC
-- MP3
-- WAV
-- AAF (limited support)
-
-Version 1.0
-"""
-        messagebox.showinfo("About", about_text)
     
     def read_metadata(self, file_path):
         """Read metadata from audio file based on its format"""
@@ -1178,5 +1192,7 @@ Version 1.0
             }
 
 if __name__ == "__main__":
+    # Define required platform variables
+    is_windows = platform.system() == 'Windows'
     app = AudioMetadataEditor()
     app.mainloop()
