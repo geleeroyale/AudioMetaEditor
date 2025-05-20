@@ -463,12 +463,87 @@ class CompatibilityChecker:
             listbox: The listbox widget
             fixed_status: Dictionary tracking fixed status
         """
+        # Check if the parent class has the enhanced auto-fix method
+        if hasattr(self.parent, 'auto_fix_compatibility'):
+            # Store the report data for the parent to use
+            self.parent.last_report_data = report_data.copy()
+            
+            # Store file paths for the parent to use
+            file_paths = []
+            for index, (filename, results) in enumerate(report_data):
+                # Skip already fixed files
+                if fixed_status[index] or not results.get('issues', []):
+                    continue
+                    
+                # Find the full path
+                for path in self.parent.checked_files_state.keys():
+                    if os.path.basename(path) == filename:
+                        file_paths.append(path)
+                        break
+            
+            # Set up callback for when auto-fix completes
+            original_callback = None
+            if hasattr(self.parent, 'completion_callback'):
+                original_callback = self.parent.completion_callback
+                
+            # Define update function
+            def update_after_fix():
+                # Update the listbox display
+                for index, (filename, results) in enumerate(report_data):
+                    # Check if fixed by looking at the full path
+                    for path in self.parent.checked_files_state.keys():
+                        if os.path.basename(path) == filename:
+                            if self.parent.checked_files_state[path].get('fixed', False):
+                                fixed_status[index] = True
+                                new_text = f"{filename} - ✓ Fixed"
+                                listbox.delete(index)
+                                listbox.insert(index, new_text)
+                                listbox.itemconfig(index, fg=self.parent.success_color)
+                                break
+                
+                # Update the display
+                if listbox.curselection():
+                    listbox.event_generate("<<ListboxSelect>>")
+                    
+                # Restore original callback
+                if original_callback:
+                    self.parent.completion_callback = original_callback
+                else:
+                    if hasattr(self.parent, 'completion_callback'):
+                        delattr(self.parent, 'completion_callback')
+            
+            # Set the callback
+            self.parent.completion_callback = update_after_fix
+            
+            # Call parent's auto-fix method
+            try:
+                self.parent.auto_fix_compatibility()
+            except Exception as e:
+                messagebox.showerror("Auto-Fix Error", f"An error occurred: {str(e)}")
+                # Restore callback in case of error
+                if original_callback:
+                    self.parent.completion_callback = original_callback
+                else:
+                    if hasattr(self.parent, 'completion_callback'):
+                        delattr(self.parent, 'completion_callback')
+        else:
+            # Fallback to basic fix implementation
+            self._basic_auto_fix(report_data, listbox, fixed_status)
+            
+    def _basic_auto_fix(self, report_data, listbox, fixed_status):
+        """Basic implementation of auto-fix functionality (fallback)
+        
+        Args:
+            report_data: List of tuples (filename, results) with compatibility information
+            listbox: The listbox widget
+            fixed_status: Dictionary tracking fixed status
+        """
         fixed_count = 0
         skipped_count = 0
         
         for index, (filename, results) in enumerate(report_data):
             # Skip already fixed or files without issues
-            if fixed_status[index] or not results['issues']:
+            if fixed_status[index] or not results.get('issues', []):
                 continue
                 
             # Find the full path
@@ -531,7 +606,7 @@ class CompatibilityChecker:
                     listbox.itemconfig(index, fg=self.parent.success_color)
                 else:
                     skipped_count += 1
-    
+
         # Show results
         messagebox.showinfo("Auto-Fix Complete", 
                           f"Successfully fixed {fixed_count} files. {skipped_count} files could not be fixed automatically.")
@@ -543,7 +618,7 @@ class CompatibilityChecker:
         # Update the display
         if listbox.curselection():
             listbox.event_generate("<<ListboxSelect>>")
-
+            
     def repair_file_integrity(self, file_path, integrity_result):
         """Attempt to repair file integrity issues
         
@@ -647,68 +722,195 @@ class CompatibilityChecker:
             return {"success": False, "message": f"MP3 repair failed: {str(e)}"}
     def _repair_flac(self, file_path):
         """Repair FLAC file with header or structural issues"""
+        backup_path = None
+        temp_dir = None
+        
         try:
             import subprocess
             import tempfile
+            import shutil
+            import time
             
-            # Create temporary files
-            temp_dir = tempfile.mkdtemp()
+            # Check if this is a macOS resource file (._ prefix)
+            if os.path.basename(file_path).startswith('._'):
+                print(f"Skipping macOS resource file: {os.path.basename(file_path)}", flush=True)
+                return {"success": False, "message": "Cannot repair macOS resource file. Please use 'Delete Selected' for resource files."}
+            
+            # Get the file extension for later use
+            file_ext = os.path.splitext(file_path)[1].lower()
+            
+            # Create a unique temporary directory
+            temp_dir = tempfile.mkdtemp(prefix="flac_repair_")
             temp_wav = os.path.join(temp_dir, os.path.basename(file_path) + ".wav")
             temp_flac = os.path.join(temp_dir, os.path.basename(file_path))
+            temp_fixed_flac = os.path.join(temp_dir, "fixed_" + os.path.basename(file_path))
+            
+            # Create a backup of the original file
+            backup_path = file_path + ".bak"
+            try:
+                shutil.copy2(file_path, backup_path)
+                print(f"Created backup of {os.path.basename(file_path)}", flush=True)
+            except Exception as e:
+                print(f"Warning: Could not create backup: {str(e)}", flush=True)
+                return {"success": False, "message": f"Could not create backup. Aborting repair to prevent data loss."}
             
             repair_message = ""
+            repair_successful = False
             
-            # Step 1: Try to use flac's built-in repair capability
+            # STAGE 1: Try to use flac's built-in repair capability
             try:
+                print(f"[STAGE 1] Attempting to repair {os.path.basename(file_path)} using flac tools...", flush=True)
+                
                 # Run flac with --keep-foreign-metadata to preserve as much as possible
-                subprocess.run(["flac", "--silent", "--decode", "--force", "--output-name", temp_wav, file_path], 
-                             check=True, stderr=subprocess.PIPE, stdout=subprocess.PIPE)
-                repair_message += "Successfully decoded FLAC to WAV. "
+                process = subprocess.run(["flac", "--decode", "--force", "--output-name", temp_wav, file_path], 
+                              check=False, stderr=subprocess.PIPE, stdout=subprocess.PIPE)
                 
-                # Re-encode the WAV back to FLAC with verified encoding
-                subprocess.run(["flac", "--silent", "--verify", "--best", "--output-name", temp_flac, temp_wav],
-                             check=True, stderr=subprocess.PIPE, stdout=subprocess.PIPE)
-                repair_message += "Successfully re-encoded to FLAC. "
-                
-                # If all went well, replace the original file
-                with open(temp_flac, 'rb') as src:
-                    with open(file_path, 'wb') as dst:
-                        dst.write(src.read())
-                
-                # Clean up temp files
-                import shutil
-                shutil.rmtree(temp_dir)
-                
-                # Validate the repaired file
-                try:
-                    audio = FLAC(file_path)
-                    # If we get here without exception, the file is readable
-                    return {"success": True, "message": f"FLAC file repaired using native FLAC tools. {repair_message}"}
-                except Exception as val_error:
-                    # Still issues after repair attempt
-                    return {"success": False, "message": f"Repair attempt completed but file still has issues: {str(val_error)}"}
+                if process.returncode == 0:
+                    repair_message += "Successfully decoded FLAC to WAV. "
+                    print("Successfully decoded to WAV format", flush=True)
                     
-            except subprocess.CalledProcessError as p_error:
-                # Fall back to mutagen method if subprocess fails
+                    # Re-encode the WAV back to FLAC with verified encoding
+                    print("Re-encoding to FLAC with verification...", flush=True)
+                    process = subprocess.run(["flac", "--verify", "--best", "--output-name", temp_flac, temp_wav],
+                                  check=False, stderr=subprocess.PIPE, stdout=subprocess.PIPE)
+                    
+                    if process.returncode == 0:
+                        repair_message += "Successfully re-encoded to FLAC. "
+                        print("Re-encoding successful", flush=True)
+                        
+                        # If all went well, replace the original file
+                        with open(temp_flac, 'rb') as src:
+                            with open(file_path, 'wb') as dst:
+                                dst.write(src.read())
+                        
+                        # Verify the fixed file immediately
+                        time.sleep(0.1)  # Small delay to ensure file system catches up
+                        integrity_result = self.check_file_integrity(file_path, file_ext)
+                        
+                        if integrity_result["status"] == "OK":
+                            success_msg = f"FLAC file repaired using native FLAC tools. {repair_message}Integrity check passed."
+                            print(success_msg, flush=True)
+                            repair_successful = True
+                            return {"success": True, "message": success_msg, "integrity_result": integrity_result}
+                        else:
+                            print("Repair didn't resolve all integrity issues. Trying alternative methods...", flush=True)
+                    else:
+                        print(f"FLAC re-encoding failed: {process.stderr.decode('utf-8', errors='ignore')}", flush=True)
+                else:
+                    print(f"FLAC decoding failed: {process.stderr.decode('utf-8', errors='ignore')}", flush=True)
+            except Exception as stage1_error:
+                print(f"Error in Stage 1 repair: {str(stage1_error)}", flush=True)
+            
+            # STAGE 2: Try direct Mutagen repair
+            if not repair_successful:
+                print(f"[STAGE 2] Attempting repair using Mutagen library...", flush=True)
                 try:
+                    # Restore from backup before attempting this method
+                    if os.path.exists(backup_path):
+                        shutil.copy2(backup_path, file_path)
+                        print("Restored from backup for fresh repair attempt", flush=True)
+                    
                     # Try to read with mutagen
                     audio = FLAC(file_path)
-                    # If we got here, the file might be readable enough to fix
+                    # Add minimal metadata if missing to ensure valid structure
+                    if not audio.tags:
+                        audio.tags = mutagen.flac.VCFLACDict()
+                        audio.tags['TITLE'] = [os.path.splitext(os.path.basename(file_path))[0]]
+                    
+                    # Try to save and fix the file
                     audio.save(file_path)
-                    return {"success": True, "message": "FLAC file header repaired successfully with mutagen"}
-                except Exception:
-                    # If all repair attempts fail
-                    return {"success": False, "message": f"FLAC repair failed with both methods. Error: {str(p_error)}"}
-                finally:
-                    # Clean up temp files
-                    import shutil
-                    try:
-                        shutil.rmtree(temp_dir)
-                    except Exception:
-                        pass
-        
+                    
+                    # Verify the fixed file
+                    time.sleep(0.1)  # Small delay
+                    integrity_result = self.check_file_integrity(file_path, file_ext)
+                    
+                    if integrity_result["status"] == "OK":
+                        success_msg = "FLAC file header repaired successfully with mutagen. Integrity check passed."
+                        print(success_msg, flush=True)
+                        repair_successful = True
+                        return {"success": True, "message": success_msg, "integrity_result": integrity_result}
+                    else:
+                        print("Mutagen repair didn't resolve all integrity issues.", flush=True)
+                except Exception as mutagen_error:
+                    print(f"Mutagen repair failed: {str(mutagen_error)}", flush=True)
+            
+            # STAGE 3: Try ffmpeg if available
+            if not repair_successful:
+                print(f"[STAGE 3] Attempting repair using ffmpeg...", flush=True)
+                try:
+                    # Restore from backup before attempting this method
+                    if os.path.exists(backup_path):
+                        shutil.copy2(backup_path, file_path)
+                        print("Restored from backup for fresh repair attempt", flush=True)
+                    
+                    # Check if ffmpeg is available
+                    ffmpeg_check = subprocess.run(["which", "ffmpeg"], 
+                                     check=False, stderr=subprocess.PIPE, stdout=subprocess.PIPE)
+                    
+                    if ffmpeg_check.returncode == 0:
+                        print("ffmpeg found, attempting repair...", flush=True)
+                        
+                        # Try to convert through ffmpeg
+                        ffmpeg_process = subprocess.run(
+                            ["ffmpeg", "-i", file_path, "-c:a", "flac", "-compression_level", "12", temp_fixed_flac],
+                            check=False, stderr=subprocess.PIPE, stdout=subprocess.PIPE
+                        )
+                        
+                        if ffmpeg_process.returncode == 0 and os.path.exists(temp_fixed_flac):
+                            # Replace original with fixed version
+                            shutil.copy2(temp_fixed_flac, file_path)
+                            print("ffmpeg repair completed", flush=True)
+                            
+                            # Check integrity
+                            integrity_result = self.check_file_integrity(file_path, file_ext)
+                            if integrity_result["status"] == "OK":
+                                success_msg = "FLAC file repaired using ffmpeg. Integrity check passed."
+                                print(success_msg, flush=True)
+                                repair_successful = True
+                                return {"success": True, "message": success_msg, "integrity_result": integrity_result}
+                            else:
+                                print("ffmpeg repair didn't resolve all integrity issues.", flush=True)
+                        else:
+                            print(f"ffmpeg repair failed: {ffmpeg_process.stderr.decode('utf-8', errors='ignore')}", flush=True)
+                    else:
+                        print("ffmpeg not found, skipping this repair method.", flush=True)
+                except Exception as ffmpeg_error:
+                    print(f"Error during ffmpeg repair: {str(ffmpeg_error)}", flush=True)
+            
+            # If we got here, all repair attempts failed
+            print("All repair attempts failed. Restoring original file from backup.", flush=True)
+            if os.path.exists(backup_path):
+                shutil.copy2(backup_path, file_path)
+                print("Original file restored.", flush=True)
+            
+            return {"success": False, "message": "All repair attempts failed to fix integrity issues.", "last_error": "No repair method was successful"}
+                
         except Exception as e:
+            print(f"FLAC repair failed with unexpected error: {str(e)}", flush=True)
+            # Try to restore from backup
+            if backup_path and os.path.exists(backup_path):
+                try:
+                    shutil.copy2(backup_path, file_path)
+                    print("Restored original file after error.", flush=True)
+                except:
+                    pass
             return {"success": False, "message": f"FLAC repair failed: {str(e)}"}
+        finally:
+            # Always clean up temporary directory
+            if temp_dir and os.path.exists(temp_dir):
+                try:
+                    shutil.rmtree(temp_dir)
+                    print("Cleaned up temporary files.", flush=True)
+                except Exception as cleanup_error:
+                    print(f"Warning: Could not clean up temporary files: {str(cleanup_error)}", flush=True)
+            
+            # Always clean up backup if repair was successful or we're done with it
+            if backup_path and os.path.exists(backup_path) and repair_successful:
+                try:
+                    os.remove(backup_path)
+                    print("Removed backup file after successful repair.", flush=True)
+                except Exception as backup_error:
+                    print(f"Warning: Could not remove backup file: {str(backup_error)}", flush=True)
     
     def _repair_wav(self, file_path):
         """Repair WAV file with header or structural issues"""

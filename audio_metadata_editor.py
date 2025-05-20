@@ -970,110 +970,201 @@ Version 1.0"""
             messagebox.showinfo("No Issues", "Please run a compatibility check first.")
             return
         
+        # Create progress dialog
+        progress_window = tk.Toplevel(self)
+        progress_window.title("Auto-Fix Progress")
+        progress_window.geometry("500x300")
+        progress_window.transient(self)
+        progress_window.grab_set()
+        
+        # Center the window
+        progress_window.update_idletasks()
+        width = progress_window.winfo_width()
+        height = progress_window.winfo_height()
+        x = self.winfo_x() + (self.winfo_width() - width) // 2
+        y = self.winfo_y() + (self.winfo_height() - height) // 2
+        progress_window.geometry(f"{width}x{height}+{x}+{y}")
+        
+        # Create a progress bar
+        progress_var = tk.DoubleVar()
+        progress_label = ttk.Label(progress_window, text="Preparing to fix compatibility issues...")
+        progress_label.pack(pady=10, padx=20, fill=tk.X)
+        progress_bar = ttk.Progressbar(progress_window, variable=progress_var, maximum=100)
+        progress_bar.pack(pady=10, padx=20, fill=tk.X)
+        
+        # Create a scrollable log frame
+        log_frame = ttk.LabelFrame(progress_window, text="Progress Log")
+        log_frame.pack(pady=10, padx=20, fill=tk.BOTH, expand=True)
+        
+        log_text = ScrolledText(log_frame, wrap=tk.WORD, height=10)
+        log_text.pack(pady=5, padx=5, fill=tk.BOTH, expand=True)
+        log_text.config(state=tk.DISABLED)
+        
+        # Function to add log entries
+        def add_log(message):
+            log_text.config(state=tk.NORMAL)
+            log_text.insert(tk.END, message + "\n")
+            log_text.see(tk.END)  # Scroll to end
+            log_text.config(state=tk.DISABLED)
+            log_text.update()  # Force update
+        
+        # Update progress variables
+        def update_progress(value, message):
+            progress_var.set(value)
+            progress_label.config(text=message)
+            progress_bar.update()
+            progress_label.update()
+        
         fixed_count = 0
         skipped_count = 0
         integrity_fixed_count = 0
+        total_files = len(self.last_report_data)
         
-        for filename, results in self.last_report_data:
-            full_path = None
-            # Find the full path from the filename
-            for path in self.checked_files_state.keys():
-                if os.path.basename(path) == filename:
-                    full_path = path
-                    break
+        # Process each file
+        def process_files():
+            nonlocal fixed_count, skipped_count, integrity_fixed_count
             
-            if not full_path:
-                continue
-                
-            # Get current metadata
-            metadata = self.read_metadata(full_path)
-            if 'error' in metadata:
-                skipped_count += 1
-                continue
-                
-            updates_made = False
-            integrity_fixed = False
+            add_log(f"Starting auto-fix process for {total_files} files...")
             
-            # Check for macOS resource files to delete
-            if 'macOS resource file detected' in results['issues']:
-                try:
-                    os.remove(full_path)
-                    messagebox.showinfo("File Deleted", 
-                                     f"Deleted problematic macOS resource file:\n{os.path.basename(full_path)}")
-                    # Refresh the directory view if needed
-                    if self.current_dir:
-                        self.load_directory(self.current_dir)
-                    fixed_count += 1
-                    continue  # Skip to next file since this one is deleted
-                except Exception as e:
-                    messagebox.showerror("Deletion Error", 
-                                      f"Could not delete file {os.path.basename(full_path)}:\n{str(e)}")
+            for idx, (filename, results) in enumerate(self.last_report_data):
+                progress_value = (idx / total_files) * 100
+                update_progress(progress_value, f"Processing file {idx+1} of {total_files}: {filename}")
+                
+                full_path = None
+                # Find the full path from the filename
+                for path in self.checked_files_state.keys():
+                    if os.path.basename(path) == filename:
+                        full_path = path
+                        break
+                
+                if not full_path:
+                    add_log(f"⚠️ Skipping {filename}: Could not determine full path")
                     skipped_count += 1
-                    continue  # Skip to next file
-            
-            # Check for file integrity issues
-            if self.compatibility_checker.perform_integrity_check.get() and 'integrity' in results:
-                integrity_result = results['integrity']
-                if integrity_result['status'] != "OK" and integrity_result.get('can_repair', False):
-                    # Found repairable integrity issue
+                    continue
+                
+                add_log(f"📄 Processing {filename}...")
+                
+                # Get current metadata
+                metadata = self.read_metadata(full_path)
+                if 'error' in metadata:
+                    add_log(f"⚠️ Error reading metadata: {metadata.get('error', 'Unknown error')}")
+                    skipped_count += 1
+                    continue
+                    
+                updates_made = False
+                integrity_fixed = False
+                
+                # Check for macOS resource files to delete
+                if 'macOS resource file detected' in results['issues']:
                     try:
-                        repair_result = self.compatibility_checker.repair_file_integrity(full_path, integrity_result)
-                        if repair_result.get('success', False):
-                            messagebox.showinfo("Integrity Repair", 
-                                             f"Successfully repaired file integrity for:\n{os.path.basename(full_path)}\n\nDetails: {repair_result.get('message', '')}")
-                            integrity_fixed = True
-                            integrity_fixed_count += 1
-                        else:
-                            messagebox.showwarning("Repair Failed", 
-                                               f"Could not repair integrity of:\n{os.path.basename(full_path)}\n\nReason: {repair_result.get('message', 'Unknown error')}")
+                        os.remove(full_path)
+                        add_log(f"🗑️ Deleted macOS resource file: {filename}")
+                        # Refresh the directory view if needed
+                        fixed_count += 1
+                        continue  # Skip to next file since this one is deleted
                     except Exception as e:
-                        messagebox.showerror("Repair Error", 
-                                          f"Error repairing file {os.path.basename(full_path)}:\n{str(e)}")
-            
-            # Auto-fix common issues
-            if 'Missing title tag' in results['issues'] and os.path.basename(full_path):
-                # Use filename (without extension) as title
-                base_name = os.path.splitext(os.path.basename(full_path))[0]
-                metadata['title'] = base_name
-                updates_made = True
+                        add_log(f"❌ Error deleting file: {str(e)}")
+                        skipped_count += 1
+                        continue  # Skip to next file
                 
-            if 'Missing artist tag' in results['issues']:
-                # Set a default artist name
-                metadata['artist'] = "Unknown Artist"
-                updates_made = True
+                # Check for file integrity issues
+                if self.compatibility_checker.perform_integrity_check.get() and 'integrity' in results:
+                    integrity_result = results['integrity']
+                    if integrity_result['status'] != "OK" and integrity_result.get('can_repair', False):
+                        # Found repairable integrity issue
+                        add_log(f"🔧 Attempting to repair file integrity for {filename}...")
+                        try:
+                            repair_result = self.compatibility_checker.repair_file_integrity(full_path, integrity_result)
+                            
+                            if repair_result.get('success', False):
+                                add_log(f"✅ Successfully repaired file integrity: {repair_result.get('message', '')}")
+                                integrity_fixed = True
+                                integrity_fixed_count += 1
+                                
+                                # Re-check the file integrity after repair
+                                if 'integrity_result' in repair_result:
+                                    results['integrity'] = repair_result['integrity_result']  # Update report with new integrity status
+                                else:
+                                    # Re-check integrity if not provided in repair result
+                                    file_ext = os.path.splitext(full_path)[1].lower()
+                                    new_integrity = self.compatibility_checker.check_file_integrity(full_path, file_ext)
+                                    results['integrity'] = new_integrity
+                                    add_log(f"🔍 Re-checked file integrity: {new_integrity['status']}")
+                            else:
+                                add_log(f"⚠️ Integrity repair failed: {repair_result.get('message', 'Unknown error')}")
+                        except Exception as e:
+                            add_log(f"❌ Error during integrity repair: {str(e)}")
                 
-            # Trim overly long tags
-            for field in ['title', 'artist', 'album']:
-                issue_text = f"{field.capitalize()} tag exceeds 250 characters"
-                if any(issue_text in issue for issue in results['issues']) and field in metadata:
-                    metadata[field] = metadata[field][:250]
+                # Auto-fix common metadata issues
+                metadata_issues_fixed = []
+                
+                # Fix missing title
+                if 'Missing title tag' in results['issues'] and os.path.basename(full_path):
+                    # Use filename (without extension) as title
+                    base_name = os.path.splitext(os.path.basename(full_path))[0]
+                    metadata['title'] = base_name
                     updates_made = True
-            
-            # Apply fixes if any were made
-            if updates_made:
-                result = self.write_metadata(full_path, metadata)
-                if result.get('success', False):
+                    metadata_issues_fixed.append("Added missing title")
+                    
+                # Fix missing artist
+                if 'Missing artist tag' in results['issues']:
+                    # Set a default artist name
+                    metadata['artist'] = "Unknown Artist"
+                    updates_made = True
+                    metadata_issues_fixed.append("Added missing artist")
+                    
+                # Trim overly long tags
+                for field in ['title', 'artist', 'album']:
+                    issue_text = f"{field.capitalize()} tag exceeds 250 characters"
+                    if any(issue_text in issue for issue in results['issues']) and field in metadata:
+                        metadata[field] = metadata[field][:250]
+                        updates_made = True
+                        metadata_issues_fixed.append(f"Trimmed {field} to 250 characters")
+                
+                # Apply metadata fixes if any were made
+                if updates_made:
+                    add_log(f"📝 Updating metadata: {', '.join(metadata_issues_fixed)}")
+                    result = self.write_metadata(full_path, metadata)
+                    if result.get('success', False):
+                        add_log(f"✅ Metadata successfully updated")
+                        fixed_count += 1
+                    else:
+                        add_log(f"❌ Metadata update failed: {result.get('message', 'Unknown error')}")
+                        skipped_count += 1
+                elif integrity_fixed:
+                    # If only integrity was fixed, count as fixed
                     fixed_count += 1
                 else:
-                    skipped_count += 1
-            elif integrity_fixed:
-                # If only integrity was fixed, count as fixed
-                fixed_count += 1
-        
-        # Show results
-        if fixed_count > 0:
+                    add_log(f"ℹ️ No changes required for {filename}")
+            
+            # Update progress bar to 100%
+            update_progress(100, "Auto-fix process completed")
+            
+            # Show summary
+            add_log("\n=== Summary ===")
+            add_log(f"Total files processed: {total_files}")
+            add_log(f"Files successfully fixed: {fixed_count}")
+            if integrity_fixed_count > 0:
+                add_log(f"Files with repaired integrity: {integrity_fixed_count}")
+            add_log(f"Files skipped or failed: {skipped_count}")
+            
+            # Add close button
+            close_button = ttk.Button(progress_window, text="Close", command=progress_window.destroy)
+            close_button.pack(pady=10)
+            
+            # Final message in the main window
             integrity_msg = f" (including {integrity_fixed_count} with integrity issues)" if integrity_fixed_count > 0 else ""
-            messagebox.showinfo("Auto-Fix Complete", 
-                              f"Successfully fixed {fixed_count} files{integrity_msg}. {skipped_count} files could not be fixed automatically.")
+            self.status_var.set(f"Auto-fix complete: {fixed_count} files fixed{integrity_msg}. {skipped_count} files skipped.")
+            
             # Refresh current file if it was modified
             if self.current_file:
                 self.load_metadata()
             # Reload directory to update file list
             if self.current_dir:
                 self.load_directory(self.current_dir)
-        else:
-            messagebox.showinfo("Auto-Fix Complete", 
-                              "No files could be automatically fixed. Some issues require manual editing.")
+        
+        # Use a separate thread for processing
+        threading.Thread(target=process_files, daemon=True).start()
         
         # Hide auto-fix button until next compatibility check
         self.auto_fix_btn.pack_forget()
