@@ -5,6 +5,12 @@ on:
     tags:
       - "v*" # Trigger on version tags (v1.0.0, v1.1.0, etc.)
 
+# Set permissions for the GITHUB_TOKEN
+permissions:
+  contents: write    # Needed for creating releases and uploading assets
+  packages: read
+  issues: read
+
 jobs:
   build:
     name: Build for ${{ matrix.os }}
