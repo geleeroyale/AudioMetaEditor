@@ -50,6 +50,9 @@ class AudioMetadataEditor(tk.Tk):
         self.geometry("1000x700")
         self.minsize(800, 600)
         
+        # Platform-specific settings
+        self.is_macos = platform.system() == 'Darwin'
+        
         # Initialize variables
         self.current_dir = os.path.expanduser("~")  # Start in user's home directory
         self.status_var = tk.StringVar(value="Ready")  # Status bar text
@@ -1248,8 +1251,8 @@ Version 1.0"""
             close_button = ttk.Button(button_frame, text="Close", command=progress_window.destroy)
             close_button.pack(pady=10, padx=20)
             
-            # Clean up any macOS resource files in the directory
-            if fixed_count > 0 or integrity_fixed_count > 0:
+            # Clean up any macOS resource files in the directory (only on macOS)
+            if (fixed_count > 0 or integrity_fixed_count > 0) and self.is_macos:
                 add_log("\n🧹 Cleaning up macOS resource files...")
                 try:
                     # Get directory from the first processed file
@@ -1260,6 +1263,9 @@ Version 1.0"""
                         add_log(f"✅ Removed {resource_files_removed} macOS resource files")
                 except Exception as e:
                     add_log(f"⚠️ Error during cleanup: {str(e)}")
+            elif fixed_count > 0 and not self.is_macos:
+                # Add informational log that cleanup was skipped (not on macOS)
+                add_log("\nℹ️ macOS resource file cleanup skipped - not running on macOS")
                     
             # Update file tree colors to reflect the changes
             self.update_file_tree_colors()
