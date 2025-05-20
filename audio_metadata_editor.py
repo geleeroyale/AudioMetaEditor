@@ -63,19 +63,38 @@ class AudioMetadataEditor(tk.Tk):
         
         # Set theme
         self.style = ttk.Style()
-        self.style.theme_use('clam')  # Use a theme that looks good on all platforms
+        # Use default theme as a base
+        if is_macos:
+            self.style.theme_use('aqua')
+        elif is_windows:
+            self.style.theme_use('vista')
+        else:
+            # On Linux and other platforms
+            self.style.theme_use('clam')
         
-        # Configure colors (dark theme)
-        bg_color = "#2d2d2d"
-        fg_color = "#e0e0e0"
-        accent_color = "#3a7ebf"
-        self.configure(background=bg_color)
+        # Define theme colors as class attributes so they're accessible from all methods
+        self.bg_color = "#FFFFFF"      # White background
+        self.fg_color = "#333333"      # Dark gray text for contrast
+        self.accent_color = "#26A69A"  # Teal accent
+        self.primary_color = "#80CBC4"  # Lighter teal
+        self.secondary_color = "#F5F5F5"  # Very light gray for secondary elements
+        self.field_bg_color = "#F9F9F9"  # Slightly off-white for form fields
+        self.highlight_color = "#4DB6AC"  # Brighter teal for hover states
+        self.error_color = "#F44336"  # Red for errors
+        self.success_color = "#4CAF50"  # Green for success indicators
         
-        self.style.configure('TFrame', background=bg_color)
-        self.style.configure('TLabel', background=bg_color, foreground=fg_color)
-        self.style.configure('TButton', background=accent_color, foreground=fg_color)
-        self.style.configure('Treeview', background=bg_color, foreground=fg_color, fieldbackground=bg_color)
-        self.style.map('Treeview', background=[('selected', accent_color)])
+        # Customize the style for a more modern look
+        
+        # Set window background color
+        self.configure(background=self.bg_color)
+        
+        # Set frame background and foreground colors
+        self.style.configure('TFrame', background=self.bg_color, foreground=self.fg_color)
+        
+        # Default style for labels
+        self.style.configure('TLabel', background=self.bg_color, foreground=self.fg_color)
+        self.style.configure('Treeview', background=self.bg_color, foreground=self.fg_color, fieldbackground=self.bg_color)
+        self.style.map('Treeview', background=[('selected', self.accent_color)])
         
         # Variables
         self.current_dir = os.path.expanduser("~")
@@ -96,8 +115,109 @@ class AudioMetadataEditor(tk.Tk):
         self.bind("<Control-s>", lambda e: self.save_metadata())
         
         # Status bar
-        status_bar = ttk.Label(self, textvariable=self.status_var, relief=tk.SUNKEN, anchor=tk.W)
+        status_bar = ttk.Label(self, textvariable=self.status_var, anchor=tk.W, style="Status.TLabel")
         status_bar.pack(side=tk.BOTTOM, fill=tk.X)
+    
+    def configure_modern_style(self):
+        # Use the class color attributes (defined in __init__) for consistent styling
+        # No need for local variables - use self.fg_color directly for consistency
+        
+        # Button styles - primary action buttons
+        self.style.configure("Accent.TButton", 
+                            foreground=self.fg_color, 
+                            background=self.accent_color,
+                            relief=tk.RAISED, 
+                            borderwidth=1, 
+                            focusthickness=1, 
+                            focuscolor=self.highlight_color,
+                            padding=(10, 6))
+        self.style.map("Accent.TButton", 
+                      foreground=[("pressed", self.fg_color), ("active", self.fg_color)],
+                      background=[("pressed", "#5daea6"), ("active", "#8fd8d0")])  # Lighter and darker accent
+        
+        # Button styles - secondary buttons
+        self.style.configure("Secondary.TButton", 
+                            foreground=self.fg_color, 
+                            background=self.secondary_color,
+                            relief=tk.RAISED, 
+                            borderwidth=1, 
+                            focusthickness=1, 
+                            focuscolor=self.highlight_color,
+                            padding=(10, 6))
+        self.style.map("Secondary.TButton", 
+                      foreground=[("pressed", self.fg_color), ("active", self.fg_color)],
+                      background=[("pressed", "#3c4e57"), ("active", self.highlight_color)])
+        
+        # Treeview styling - for the file list
+        self.style.configure("Treeview", 
+                            background=self.field_bg_color,
+                            foreground=self.fg_color,
+                            rowheight=25,
+                            fieldbackground=self.field_bg_color,
+                            borderwidth=0)
+        self.style.map("Treeview",
+                      background=[("selected", self.primary_color)],
+                      foreground=[("selected", self.fg_color)])
+        
+        # Treeview heading style - make headings more visible
+        self.style.configure("Treeview.Heading", 
+                            font=("Helvetica", 10, "bold"),
+                            background=self.secondary_color, 
+                            foreground=self.fg_color,
+                            padding=(10, 5),
+                            relief=tk.FLAT)
+        self.style.map("Treeview.Heading",
+                      background=[("active", self.highlight_color)],
+                      foreground=[("active", self.fg_color)])
+                      
+        # Label frames - for sections
+        self.style.configure("TLabelframe", 
+                            background=self.bg_color,
+                            borderwidth=1,
+                            relief=tk.GROOVE)
+        self.style.configure("TLabelframe.Label", 
+                            foreground=self.accent_color,
+                            background=self.bg_color,
+                            font=("Helvetica", 11, "bold"))
+                            
+        # Entry fields
+        self.style.configure("TEntry", 
+                            foreground=self.fg_color,
+                            fieldbackground=self.field_bg_color,
+                            insertcolor=self.accent_color,  # Text cursor color
+                            borderwidth=1,
+                            padding=(8, 6))
+        self.style.map("TEntry",
+                       fieldbackground=[("focus", "#435761")],  # Slightly lighter when focused
+                       bordercolor=[("focus", self.accent_color)])
+                       
+        # Checkbuttons - for field selection
+        self.style.configure("TCheckbutton", 
+                            background=self.bg_color,
+                            foreground=self.fg_color,
+                            indicatorcolor=self.accent_color)
+        self.style.map("TCheckbutton",
+                      background=[("active", self.bg_color)],
+                      foreground=[("active", self.accent_color)])
+                      
+        # Labels
+        self.style.configure("TLabel", 
+                            background=self.bg_color,
+                            foreground=self.fg_color,
+                            padding=(2, 2))
+                            
+        # Info header labels - teal headers for visual hierarchy
+        self.style.configure("Header.TLabel", 
+                            font=("Helvetica", 10, "bold"),
+                            foreground=self.accent_color,  # Teal for emphasis
+                            background=self.bg_color)
+                            
+        # Status bar
+        self.style.configure("Status.TLabel", 
+                            background=self.secondary_color,
+                            foreground=self.fg_color,
+                            relief=tk.SUNKEN,
+                            padding=(10, 5))
     
     def create_menu(self):
         """Create the application menu"""
@@ -111,12 +231,14 @@ class AudioMetadataEditor(tk.Tk):
         file_menu.add_command(label="Exit", command=self.quit)
         menubar.add_cascade(label="File", menu=file_menu)
         
-        # Tools menu
+        # Tools menu - we'll keep the structure in place for future tool additions
         tools_menu = tk.Menu(menubar, tearoff=0)
         self.tools_menu = tools_menu
-        tools_menu.add_command(label="Batch Edit...", command=self.batch_edit, state=tk.DISABLED)
-        self.batch_edit_menu_item_index = tools_menu.index(tk.END) # Get index of the last added item
-        menubar.add_cascade(label="Tools", menu=tools_menu)
+        # Batch editing is now integrated directly in the main interface
+        
+        # Only add the Tools menu if it contains items
+        if tools_menu.index(tk.END) is not None:
+            menubar.add_cascade(label="Tools", menu=self.tools_menu)
         
         # Help menu
         help_menu = tk.Menu(menubar, tearoff=0)
@@ -154,7 +276,7 @@ class AudioMetadataEditor(tk.Tk):
         
         # File list with scrollbar
         file_frame = ttk.Frame(browser_frame)
-        file_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        file_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
         # Define columns: Checkbox, Filename, Format, Duration
         columns = ("checked", "filename", "format", "duration")
@@ -168,7 +290,7 @@ class AudioMetadataEditor(tk.Tk):
         self.file_tree.heading("format", text="Format")
         self.file_tree.heading("duration", text="Duration")
         
-        self.file_tree.column("checked", width=30, anchor=tk.CENTER, stretch=tk.NO)
+        self.file_tree.column("checked", width=36, anchor=tk.CENTER, stretch=tk.NO)
         self.file_tree.column("filename", width=250, stretch=tk.YES)
         self.file_tree.column("format", width=80, anchor=tk.W)
         self.file_tree.column("duration", width=80, anchor=tk.W)
@@ -180,96 +302,153 @@ class AudioMetadataEditor(tk.Tk):
         self.file_tree.bind("<Button-1>", self.on_tree_click)
         
         # Right panel - metadata editor
-        metadata_frame = ttk.LabelFrame(main_frame, text="Metadata")
+        metadata_frame = ttk.LabelFrame(main_frame, text="Metadata Editor")
         # Use pack for metadata_frame as browser_frame (its sibling in main_frame) uses pack.
-        metadata_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=5, pady=5)
+        metadata_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=10, pady=5)
         
         # Split into file info and editable metadata
         metadata_frame.columnconfigure(0, weight=1)
         metadata_frame.rowconfigure(0, weight=0)  # File info
         metadata_frame.rowconfigure(1, weight=1)  # Editable metadata
         
+        # Style specifically for the ScrolledText widget (Comment field)
+        self.option_add("*Text*Background", self.field_bg_color)  # Dark background
+        self.option_add("*Text*foreground", self.fg_color)  # Light text
+        self.option_add("*Text*insertBackground", self.accent_color)  # Teal cursor
+        
         # File information panel
         info_frame = ttk.LabelFrame(metadata_frame, text="File Information")
-        info_frame.grid(row=0, column=0, sticky="ew", padx=5, pady=5)
+        info_frame.grid(row=0, column=0, sticky="ew", padx=10, pady=10)
         
         info_grid = ttk.Frame(info_frame)
-        info_grid.pack(fill=tk.X, padx=10, pady=10)
+        info_grid.pack(fill=tk.X, padx=15, pady=12)
         
         # File info grid layout
         info_grid.columnconfigure(0, weight=0)
         info_grid.columnconfigure(1, weight=1)
         
-        # File info labels
-        ttk.Label(info_grid, text="File:").grid(row=0, column=0, sticky=tk.W, pady=2)
+        # File info labels - using Header.TLabel style for headers
+        ttk.Label(info_grid, text="File:", style="Header.TLabel").grid(row=0, column=0, sticky=tk.W, pady=4)
         self.file_label = ttk.Label(info_grid, text="-")
-        self.file_label.grid(row=0, column=1, sticky=tk.W, pady=2)
+        self.file_label.grid(row=0, column=1, sticky=tk.W, pady=4, padx=5)
         
-        ttk.Label(info_grid, text="Format:").grid(row=1, column=0, sticky=tk.W, pady=2)
+        ttk.Label(info_grid, text="Format:", style="Header.TLabel").grid(row=1, column=0, sticky=tk.W, pady=4)
         self.format_label = ttk.Label(info_grid, text="-")
-        self.format_label.grid(row=1, column=1, sticky=tk.W, pady=2)
+        self.format_label.grid(row=1, column=1, sticky=tk.W, pady=4, padx=5)
         
-        ttk.Label(info_grid, text="Channels:").grid(row=2, column=0, sticky=tk.W, pady=2)
+        ttk.Label(info_grid, text="Channels:", style="Header.TLabel").grid(row=2, column=0, sticky=tk.W, pady=4)
         self.channels_label = ttk.Label(info_grid, text="-")
-        self.channels_label.grid(row=2, column=1, sticky=tk.W, pady=2)
+        self.channels_label.grid(row=2, column=1, sticky=tk.W, pady=4, padx=5)
         
-        ttk.Label(info_grid, text="Sample Rate:").grid(row=3, column=0, sticky=tk.W, pady=2)
+        ttk.Label(info_grid, text="Sample Rate:", style="Header.TLabel").grid(row=3, column=0, sticky=tk.W, pady=4)
         self.sample_rate_label = ttk.Label(info_grid, text="-")
-        self.sample_rate_label.grid(row=3, column=1, sticky=tk.W, pady=2)
+        self.sample_rate_label.grid(row=3, column=1, sticky=tk.W, pady=4, padx=5)
         
-        ttk.Label(info_grid, text="Bit Depth/Rate:").grid(row=4, column=0, sticky=tk.W, pady=2)
+        ttk.Label(info_grid, text="Bit Depth/Rate:", style="Header.TLabel").grid(row=4, column=0, sticky=tk.W, pady=4)
         self.bit_depth_label = ttk.Label(info_grid, text="-")
-        self.bit_depth_label.grid(row=4, column=1, sticky=tk.W, pady=2)
+        self.bit_depth_label.grid(row=4, column=1, sticky=tk.W, pady=4, padx=5)
         
-        ttk.Label(info_grid, text="Duration:").grid(row=5, column=0, sticky=tk.W, pady=2)
+        ttk.Label(info_grid, text="Duration:", style="Header.TLabel").grid(row=5, column=0, sticky=tk.W, pady=4)
         self.duration_label = ttk.Label(info_grid, text="-")
-        self.duration_label.grid(row=5, column=1, sticky=tk.W, pady=2)
+        self.duration_label.grid(row=5, column=1, sticky=tk.W, pady=4, padx=5)
         
         # Metadata editor form
         form_frame = ttk.Frame(metadata_frame)
-        form_frame.grid(row=1, column=0, sticky="nsew", padx=5, pady=5)
+        form_frame.grid(row=1, column=0, sticky="nsew", padx=10, pady=10)
         
         form_frame.columnconfigure(0, weight=0)
         form_frame.columnconfigure(1, weight=1)
         
-        # Metadata form fields
-        ttk.Label(form_frame, text="Title:").grid(row=0, column=0, sticky=tk.W, pady=5)
+        # Configure columns for field checkboxes (for batch editing)
+        form_frame.columnconfigure(0, weight=0)  # Checkbox
+        form_frame.columnconfigure(1, weight=0)  # Label
+        form_frame.columnconfigure(2, weight=1)  # Entry
+        
+        # Metadata field checkboxes (for batch editing)
+        self.batch_field_vars = {}
+        
+        # Create a special style for field checkboxes to make them more prominent
+        self.style.configure("Field.TCheckbutton", 
+                           background=self.field_bg_color,
+                           foreground=self.fg_color,
+                           relief=tk.GROOVE,
+                           indicatorcolor=self.accent_color)
+        
+        # Metadata form fields with integrated batch checkboxes
+        # Title
+        self.batch_field_vars['title'] = tk.BooleanVar(value=False)
+        title_checkbox = ttk.Checkbutton(form_frame, variable=self.batch_field_vars['title'], style="Field.TCheckbutton")
+        title_checkbox.grid(row=0, column=0, padx=(0,6))
+        
+        ttk.Label(form_frame, text="Title:", style="Header.TLabel").grid(row=0, column=1, sticky=tk.W, pady=8)
         self.title_var = tk.StringVar()
-        ttk.Entry(form_frame, textvariable=self.title_var).grid(row=0, column=1, sticky=tk.EW, pady=5, padx=5)
+        ttk.Entry(form_frame, textvariable=self.title_var).grid(row=0, column=2, sticky=tk.EW, pady=8, padx=10)
         
-        ttk.Label(form_frame, text="Artist:").grid(row=1, column=0, sticky=tk.W, pady=5)
+        # Artist
+        self.batch_field_vars['artist'] = tk.BooleanVar(value=False)
+        artist_checkbox = ttk.Checkbutton(form_frame, variable=self.batch_field_vars['artist'], style="Field.TCheckbutton")
+        artist_checkbox.grid(row=1, column=0, padx=(0,6))
+        
+        ttk.Label(form_frame, text="Artist:", style="Header.TLabel").grid(row=1, column=1, sticky=tk.W, pady=8)
         self.artist_var = tk.StringVar()
-        ttk.Entry(form_frame, textvariable=self.artist_var).grid(row=1, column=1, sticky=tk.EW, pady=5, padx=5)
+        ttk.Entry(form_frame, textvariable=self.artist_var).grid(row=1, column=2, sticky=tk.EW, pady=8, padx=10)
         
-        ttk.Label(form_frame, text="Album:").grid(row=2, column=0, sticky=tk.W, pady=5)
+        # Album
+        self.batch_field_vars['album'] = tk.BooleanVar(value=False)
+        album_checkbox = ttk.Checkbutton(form_frame, variable=self.batch_field_vars['album'], style="Field.TCheckbutton")
+        album_checkbox.grid(row=2, column=0, padx=(0,6))
+        
+        ttk.Label(form_frame, text="Album:", style="Header.TLabel").grid(row=2, column=1, sticky=tk.W, pady=8)
         self.album_var = tk.StringVar()
-        ttk.Entry(form_frame, textvariable=self.album_var).grid(row=2, column=1, sticky=tk.EW, pady=5, padx=5)
+        ttk.Entry(form_frame, textvariable=self.album_var).grid(row=2, column=2, sticky=tk.EW, pady=8, padx=10)
         
-        ttk.Label(form_frame, text="Year/Date:").grid(row=3, column=0, sticky=tk.W, pady=5)
+        # Year/Date
+        self.batch_field_vars['date'] = tk.BooleanVar(value=False)
+        date_checkbox = ttk.Checkbutton(form_frame, variable=self.batch_field_vars['date'], style="Field.TCheckbutton")
+        date_checkbox.grid(row=3, column=0, padx=(0,6))
+        
+        ttk.Label(form_frame, text="Year/Date:", style="Header.TLabel").grid(row=3, column=1, sticky=tk.W, pady=8)
         self.date_var = tk.StringVar()
-        ttk.Entry(form_frame, textvariable=self.date_var).grid(row=3, column=1, sticky=tk.EW, pady=5, padx=5)
+        ttk.Entry(form_frame, textvariable=self.date_var).grid(row=3, column=2, sticky=tk.EW, pady=8, padx=10)
         
-        ttk.Label(form_frame, text="Genre:").grid(row=4, column=0, sticky=tk.W, pady=5)
+        # Genre
+        self.batch_field_vars['genre'] = tk.BooleanVar(value=False)
+        genre_checkbox = ttk.Checkbutton(form_frame, variable=self.batch_field_vars['genre'], style="Field.TCheckbutton")
+        genre_checkbox.grid(row=4, column=0, padx=(0,6))
+        
+        ttk.Label(form_frame, text="Genre:", style="Header.TLabel").grid(row=4, column=1, sticky=tk.W, pady=8)
         self.genre_var = tk.StringVar()
-        ttk.Entry(form_frame, textvariable=self.genre_var).grid(row=4, column=1, sticky=tk.EW, pady=5, padx=5)
+        ttk.Entry(form_frame, textvariable=self.genre_var).grid(row=4, column=2, sticky=tk.EW, pady=8, padx=10)
         
-        ttk.Label(form_frame, text="Comment:").grid(row=5, column=0, sticky=tk.NW, pady=5)
+        # Comment
+        self.batch_field_vars['comment'] = tk.BooleanVar(value=False)
+        comment_checkbox = ttk.Checkbutton(form_frame, variable=self.batch_field_vars['comment'], style="Field.TCheckbutton")
+        comment_checkbox.grid(row=5, column=0, padx=(0,6), sticky=tk.N)
+        
+        ttk.Label(form_frame, text="Comment:", style="Header.TLabel").grid(row=5, column=1, sticky=tk.NW, pady=8)
         self.comment_var = tk.StringVar()
-        self.comment_text = ScrolledText(form_frame, height=5, width=30)
-        self.comment_text.grid(row=5, column=1, sticky=tk.EW, pady=5, padx=5)
+        self.comment_text = ScrolledText(form_frame, height=5, width=30, relief=tk.SOLID, borderwidth=1)
+        self.comment_text.grid(row=5, column=2, sticky=tk.EW, pady=8, padx=10)
         
         # Add some vertical space
         ttk.Frame(form_frame).grid(row=6, column=0, pady=10)
         
         # Buttons
         btn_frame = ttk.Frame(form_frame)
-        btn_frame.grid(row=7, column=0, columnspan=2, sticky=tk.EW)
+        btn_frame.grid(row=7, column=0, columnspan=3, sticky=tk.EW)
         
-        save_btn = ttk.Button(btn_frame, text="Save Changes", command=self.save_metadata)
-        save_btn.pack(side=tk.LEFT, padx=5)
+        # Using StringVar for dynamic button text
+        self.save_btn_text = tk.StringVar(value="Save Changes")
+        self.save_btn = ttk.Button(btn_frame, textvariable=self.save_btn_text, command=self.save_metadata, style="Accent.TButton")
+        self.save_btn.pack(side=tk.LEFT, padx=6, pady=3)
         
-        revert_btn = ttk.Button(btn_frame, text="Revert Changes", command=self.load_metadata)
-        revert_btn.pack(side=tk.LEFT, padx=5)
+        revert_btn = ttk.Button(btn_frame, text="Revert Changes", command=self.load_metadata, style="Secondary.TButton")
+        revert_btn.pack(side=tk.LEFT, padx=6, pady=3)
+        
+        # Batch apply button (only visible when files are checked)
+        self.batch_apply_btn = ttk.Button(btn_frame, text="Apply to Checked Files", command=self.apply_batch_changes, style="Accent.TButton")
+        self.batch_apply_btn.pack(side=tk.RIGHT, padx=6, pady=3)
+        self.batch_apply_btn.pack_forget()  # Initially hidden
     
     def browse_directory(self):
         """Open directory browser dialog and load audio files"""
@@ -353,18 +532,19 @@ class AudioMetadataEditor(tk.Tk):
             self.status_var.set("No audio files found in the selected directory.")
     
     def update_batch_edit_menu_state(self):
-        """Enable/disable batch edit menu based on checked files."""
-        if hasattr(self, 'tools_menu') and self.batch_edit_menu_item_index is not None:
-            any_checked = any(self.checked_files_state.values())
-            if any_checked:
-                self.tools_menu.entryconfigure(self.batch_edit_menu_item_index, state=tk.NORMAL)
-            else:
-                self.tools_menu.entryconfigure(self.batch_edit_menu_item_index, state=tk.DISABLED)
+        """This method is kept for backward compatibility but no longer needed"""
+        # No menu item to update anymore as batch editing is now integrated in the main interface
+        pass
 
     def on_tree_click(self, event):
-        """Handle clicks on the Treeview for checkbox toggling and row selection."""
+        """Handle click on the file_tree Treeview - either check/uncheck or select file"""
         region = self.file_tree.identify_region(event.x, event.y)
-        column_id = self.file_tree.identify_column(event.x)
+        if region == "cell":
+            # Get the item (row) and column that was clicked
+            item_id = self.file_tree.identify_row(event.y)
+            column_id = self.file_tree.identify_column(event.x)
+            column_index = int(column_id.replace('#', '')) - 1
+            columns = self.file_tree.cget("columns")
         item_id = self.file_tree.identify_row(event.y) # This is the iid (file_path)
 
         if not item_id: # Click outside of any item
@@ -452,7 +632,17 @@ class AudioMetadataEditor(tk.Tk):
             self.status_var.set("Error loading metadata")
     
     def save_metadata(self):
-        """Save metadata changes to the audio file"""
+        """Save metadata changes to the audio file or multiple checked files"""
+        # Check if we're in batch mode (multiple files checked + at least one batch field checkbox checked)
+        checked_files = [fp for fp, checked in self.checked_files_state.items() if checked]
+        batch_fields_checked = any(var.get() for var in self.batch_field_vars.values())
+        
+        # If in batch mode with multiple files, use the batch operation
+        if len(checked_files) > 1 and batch_fields_checked:
+            self.apply_batch_changes()
+            return
+        
+        # Regular single file edit
         if not self.current_file:
             messagebox.showinfo("Info", "No file selected")
             return
@@ -478,8 +668,15 @@ class AudioMetadataEditor(tk.Tk):
                 self.status_var.set(f"Metadata saved to {os.path.basename(self.current_file)}")
                 # Update current metadata
                 self.current_metadata.update(metadata)
+                
+                # If this file was the only checked file and batch fields were selected,
+                # reset the batch field checkboxes
+                if len(checked_files) == 1 and self.current_file in checked_files and batch_fields_checked:
+                    for var in self.batch_field_vars.values():
+                        var.set(False)
+                    self.update_ui_for_batch() # Update UI to reflect changes
             else:
-                error_message = result.get('message', 'Unknown error')
+                error_message = result.get('error', 'Unknown error')
                 messagebox.showerror("Error", f"Failed to save metadata: {error_message}")
                 self.status_var.set("Error saving metadata")
                 
@@ -487,13 +684,119 @@ class AudioMetadataEditor(tk.Tk):
             messagebox.showerror("Error", f"Error saving metadata: {str(e)}")
             self.status_var.set("Error saving metadata")
     
-    def batch_edit(self):
-        """Open batch editing dialog for files marked as checked."""
+    def update_ui_for_batch(self):
+        """Update UI to show or hide batch editing controls based on file selection state"""
+        checked_files = [fp for fp, checked in self.checked_files_state.items() if checked]
+        files_checked = len(checked_files) > 0
+        
+        # Update batch apply button visibility
+        if files_checked:
+            self.batch_apply_btn.pack(side=tk.RIGHT, padx=5)  # Show button
+            
+            # Update Save button text to show number of files
+            if len(checked_files) > 1 and any(var.get() for var in self.batch_field_vars.values()):
+                self.save_btn_text.set(f"Save Changes ({len(checked_files)} files)")
+            else:
+                self.save_btn_text.set("Save Changes")
+        else:
+            self.batch_apply_btn.pack_forget()  # Hide button
+            self.save_btn_text.set("Save Changes")  # Reset save button text
+            
+            # Reset all field checkboxes
+            for var in self.batch_field_vars.values():
+                var.set(False)
+    
+    def apply_batch_changes(self):
+        """Apply changes from the main form to all checked files"""
         files_to_process = [fp for fp, checked in self.checked_files_state.items() if checked]
-
+        
         if not files_to_process:
             messagebox.showinfo("Info", "No files checked. Please check files in the list to batch edit.")
             return
+            
+        # Check if any field is selected for batch update
+        any_field_selected = any(var.get() for var in self.batch_field_vars.values())
+        if not any_field_selected:
+            messagebox.showinfo("Info", "No fields selected to update. Please tick the checkbox next to the fields you want to change.")
+            return
+            
+        # Confirm with user
+        if not messagebox.askyesno("Confirm Batch Update", 
+                               f"This will modify metadata for {len(files_to_process)} selected file(s) based on the ticked fields. Continue?"):
+            return
+            
+        self.status_var.set(f"Batch updating {len(files_to_process)} files...")
+        self.update_idletasks()
+        
+        # Gather field values to update
+        fields_to_update_values = {}
+        for field_key, checkbox_var in self.batch_field_vars.items():
+            if checkbox_var.get():  # If field checkbox is checked
+                if field_key == 'comment':
+                    value = self.comment_text.get(1.0, tk.END).strip()
+                elif field_key == 'title':
+                    value = self.title_var.get()
+                elif field_key == 'artist':
+                    value = self.artist_var.get()
+                elif field_key == 'album':
+                    value = self.album_var.get()
+                elif field_key == 'date':
+                    value = self.date_var.get()
+                elif field_key == 'genre':
+                    value = self.genre_var.get()
+                fields_to_update_values[field_key] = value
+                
+        # Process files in a separate thread to keep UI responsive
+        success_count = 0
+        failed_files_details = []
+        
+        def _process_batch():
+            nonlocal success_count, failed_files_details
+            for file_path in files_to_process:
+                try:
+                    current_metadata = self.read_metadata(file_path)
+                    if 'error' in current_metadata and not file_path: # If read error, report it unless it's expected
+                       failed_files_details.append((os.path.basename(file_path), f"Initial read failed: {current_metadata['error']}"))
+                       continue
+                       
+                    metadata_to_write = current_metadata.copy()
+                    
+                    for field_key, new_value in fields_to_update_values.items():
+                        metadata_to_write[field_key] = new_value
+                    
+                    result = self.write_metadata(file_path, metadata_to_write)
+                    if result.get('success', False):
+                        success_count += 1
+                    else:
+                        failed_files_details.append((os.path.basename(file_path), result.get('error', 'Unknown write error')))
+                except Exception as e:
+                    failed_files_details.append((os.path.basename(file_path), str(e)))
+            
+            self.after(0, _show_batch_results)
+            
+        def _show_batch_results():
+            if failed_files_details:
+                error_msg = "\n".join([f"{name}: {error}" for name, error in failed_files_details])
+                messagebox.showerror("Batch Update Results", 
+                                 f"Updated {success_count} of {len(files_to_process)} files.\n\nErrors:\n{error_msg}")
+            else:
+                messagebox.showinfo("Batch Update Complete", f"Successfully updated metadata for {success_count} files.")
+            
+            self.status_var.set(f"Batch update completed: {success_count} of {len(files_to_process)} successful")
+            
+            # Refresh file tree to show any changes
+            # Reload the current directory to refresh the list
+            if self.current_dir:
+                self.load_directory(self.current_dir)
+        
+        # Start processing thread
+        threading.Thread(target=_process_batch, daemon=True).start()
+    
+    def batch_edit(self):
+        """Legacy batch edit function kept for backward compatibility"""
+        # This redirects any possible external calls to the batch_edit method
+        # to the new apply_batch_changes method
+        self.apply_batch_changes()
 
         # Create batch edit dialog
         dialog = tk.Toplevel(self)
