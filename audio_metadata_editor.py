@@ -616,7 +616,16 @@ Version 1.0"""
         
         # Update all checked states
         for file_path in self.checked_files_state.keys():
-            self.checked_files_state[file_path] = select_all
+            # Handle different types of state storage
+            if isinstance(self.checked_files_state[file_path], dict):
+                self.checked_files_state[file_path]['checked'] = select_all
+            else:
+                # Convert to dictionary if it's still a boolean
+                self.checked_files_state[file_path] = {
+                    'checked': select_all,
+                    'status': None,
+                    'fixed': False
+                }
             
             # Update visual checkbox
             current_values = list(self.file_tree.item(file_path, 'values'))
@@ -628,9 +637,10 @@ Version 1.0"""
     
     # Delete selected files
     def delete_selected_files(self):
-        """Delete the selected/checked files from disk"""
-        # Get checked files
-        checked_files = [fp for fp, checked in self.checked_files_state.items() if checked]
+        """Delete all checked files"""
+        checked_files = [fp for fp, info in self.checked_files_state.items() 
+                        if isinstance(info, dict) and info.get('checked', False) or 
+                           isinstance(info, bool) and info]
         
         # If no files are checked, try to use the currently selected file
         if not checked_files and self.current_file:
@@ -686,18 +696,38 @@ Version 1.0"""
         self.file_list = files
         self.checked_files_state = {}
         
+        # Configure tags for color-coding files
+        self.file_tree.tag_configure('problem', foreground='#ff6b6b')    # Red for files with issues
+        self.file_tree.tag_configure('ok', foreground='#66bb6a')        # Green for files with no issues
+        self.file_tree.tag_configure('optimizable', foreground='#ffb74d') # Yellow for files that could be optimized
+        
         checked_symbol = "[ ]"  # Unchecked by default
         
         for file_path in files:
-            self.checked_files_state[file_path] = False  # Initialize as unchecked
+            # Initialize file state with more detailed information
+            self.checked_files_state[file_path] = {
+                'checked': False,  # Whether checked in the UI
+                'status': None,    # Status: 'problem', 'ok', 'optimizable'
+                'fixed': False     # Whether it's been fixed
+            }
+            
             display_name = os.path.basename(file_path)
             fmt, dur = "N/A", "-"
+            tag = None  # Default no tag
+            
+            # Check for macOS resource files
+            if display_name.startswith('._'):
+                self.checked_files_state[file_path]['status'] = 'problem'
+                tag = 'problem'
+                display_name += " (Resource File)"
             
             try:
                 metadata = self.read_metadata(file_path)
                 if metadata.get('error') and not metadata.get('format'):
                     display_name += " (Error)"
                     fmt = "Error"
+                    self.checked_files_state[file_path]['status'] = 'problem'
+                    tag = 'problem'
                 else:
                     fmt = metadata.get('format', 'N/A')
                     length = metadata.get('length', 0)
@@ -708,10 +738,13 @@ Version 1.0"""
             except Exception:
                 display_name += " (Read Err)"
                 fmt = "Error"
+                self.checked_files_state[file_path]['status'] = 'problem'
+                tag = 'problem'
             
             # Values: checked_status, filename, format, duration
             self.file_tree.insert("", tk.END, iid=file_path, 
-                                  values=(checked_symbol, display_name, fmt, dur))
+                                  values=(checked_symbol, display_name, fmt, dur),
+                                  tags=(tag,) if tag else ())
         
         # Reset select all checkbox
         if hasattr(self, 'select_all_var'):
@@ -722,13 +755,41 @@ Version 1.0"""
             self.status_var.set(f"Loaded {len(files)} files.")
         else:
             self.status_var.set("No audio files found in the selected directory.")
+            
+    def update_file_tree_colors(self):
+        """Update file tree item colors based on their status after check or repair"""
+        for file_path in self.checked_files_state:
+            if not self.file_tree.exists(file_path):
+                continue
+                
+            # Get status from checked_files_state
+            file_info = self.checked_files_state[file_path]
+            status = file_info.get('status')
+            fixed = file_info.get('fixed', False)
+            
+            # Determine appropriate tag
+            tag = None
+            if fixed:
+                tag = 'ok'  # Green for fixed files
+            elif status == 'problem':
+                tag = 'problem'  # Red for problems
+            elif status == 'optimizable':
+                tag = 'optimizable'  # Yellow for optimizable files
+            elif status == 'ok':
+                tag = 'ok'  # Green for ok files
+                
+            # Apply the tag if found
+            if tag:
+                self.file_tree.item(file_path, tags=(tag,))
     
     # Check compatibility of files against the Generic Strict Profile
     def check_compatibility(self):
         """Check selected files against the Generic Strict Profile for compatibility"""
         # Check if any files are selected or checked
         selected_item = self.file_tree.selection()
-        checked_files = [fp for fp, checked in self.checked_files_state.items() if checked]
+        checked_files = [fp for fp, info in self.checked_files_state.items() 
+                        if isinstance(info, dict) and info.get('checked', False) or 
+                           isinstance(info, bool) and info]
         
         if not selected_item and not checked_files:
             messagebox.showinfo("No Files Selected", "Please select or check at least one file to check compatibility.")
@@ -758,6 +819,23 @@ Version 1.0"""
         # Use the compatibility checker to validate files
         self.last_report_data, total_issues = self.compatibility_checker.check_compatibility(
             files_to_check, self.read_metadata)
+        
+        # Update file status in our tracked state and update colors
+        for filename, results in self.last_report_data:
+            # Find the full path from the filename
+            for file_path in self.checked_files_state:
+                if os.path.basename(file_path) == filename:
+                    # Update the status based on check results
+                    if results.get('issues', []):
+                        self.checked_files_state[file_path]['status'] = 'problem'  # Red for problems
+                    elif results.get('warnings', []):
+                        self.checked_files_state[file_path]['status'] = 'optimizable'  # Yellow for warnings
+                    else:
+                        self.checked_files_state[file_path]['status'] = 'ok'  # Green for no issues
+                    break
+        
+        # Update the file tree with the new status colors
+        self.update_file_tree_colors()
         
         # Show Auto-Fix button if issues were found
         if total_issues > 0:
@@ -1128,12 +1206,26 @@ Version 1.0"""
                     if result.get('success', False):
                         add_log(f"✅ Metadata successfully updated")
                         fixed_count += 1
+                        
+                        # Mark as fixed in our state
+                        for path in self.checked_files_state:
+                            if os.path.basename(path) == filename:
+                                self.checked_files_state[path]['fixed'] = True
+                                self.checked_files_state[path]['status'] = 'ok'
+                                break
                     else:
                         add_log(f"❌ Metadata update failed: {result.get('message', 'Unknown error')}")
                         skipped_count += 1
                 elif integrity_fixed:
                     # If only integrity was fixed, count as fixed
                     fixed_count += 1
+                    
+                    # Mark as fixed in our state
+                    for path in self.checked_files_state:
+                        if os.path.basename(path) == filename:
+                            self.checked_files_state[path]['fixed'] = True
+                            self.checked_files_state[path]['status'] = 'ok'
+                            break
                 else:
                     add_log(f"ℹ️ No changes required for {filename}")
             
@@ -1148,9 +1240,29 @@ Version 1.0"""
                 add_log(f"Files with repaired integrity: {integrity_fixed_count}")
             add_log(f"Files skipped or failed: {skipped_count}")
             
-            # Add close button
-            close_button = ttk.Button(progress_window, text="Close", command=progress_window.destroy)
-            close_button.pack(pady=10)
+            # Add a frame for the close button to ensure proper positioning
+            button_frame = ttk.Frame(progress_window)
+            button_frame.pack(pady=10, fill=tk.X)
+            
+            # Add close button with plenty of spacing
+            close_button = ttk.Button(button_frame, text="Close", command=progress_window.destroy)
+            close_button.pack(pady=10, padx=20)
+            
+            # Clean up any macOS resource files in the directory
+            if fixed_count > 0 or integrity_fixed_count > 0:
+                add_log("\n🧹 Cleaning up macOS resource files...")
+                try:
+                    # Get directory from the first processed file
+                    if full_path:
+                        directory = os.path.dirname(full_path)
+                        # Use the compatibility checker to clean up resource files
+                        resource_files_removed = self.compatibility_checker.cleanup_resource_files(directory)
+                        add_log(f"✅ Removed {resource_files_removed} macOS resource files")
+                except Exception as e:
+                    add_log(f"⚠️ Error during cleanup: {str(e)}")
+                    
+            # Update file tree colors to reflect the changes
+            self.update_file_tree_colors()
             
             # Final message in the main window
             integrity_msg = f" (including {integrity_fixed_count} with integrity issues)" if integrity_fixed_count > 0 else ""
@@ -1185,13 +1297,16 @@ Version 1.0"""
             return
 
         if region == "cell" and column_id == "#1": # Clicked on the 'checked' column
-            current_state = self.checked_files_state.get(item_id, False)
-            new_state = not current_state
-            self.checked_files_state[item_id] = new_state
+            file_info = self.checked_files_state.get(item_id, {})
+            current_checked = file_info.get('checked', False)
+            new_checked = not current_checked
+            
+            # Update the checked state while preserving other information
+            self.checked_files_state[item_id]['checked'] = new_checked
             
             checked_symbol = "[✔]"
             unchecked_symbol = "[ ]"
-            symbol_to_set = checked_symbol if new_state else unchecked_symbol
+            symbol_to_set = checked_symbol if new_checked else unchecked_symbol
             
             # Update the visual state of the checkbox in the tree
             current_values = list(self.file_tree.item(item_id, 'values'))
@@ -1269,11 +1384,13 @@ Version 1.0"""
     def save_metadata(self):
         """Save metadata changes to the audio file or multiple checked files"""
         # Check if we're in batch mode (multiple files checked + at least one batch field checkbox checked)
-        checked_files = [fp for fp, checked in self.checked_files_state.items() if checked]
+        checked_files = [fp for fp, info in self.checked_files_state.items() 
+                        if isinstance(info, dict) and info.get('checked', False) or 
+                           isinstance(info, bool) and info]
         batch_fields_checked = any(var.get() for var in self.batch_field_vars.values())
         
         # If in batch mode with multiple files, use the batch operation
-        if len(checked_files) > 1 and batch_fields_checked:
+        if checked_files and batch_fields_checked:
             self.apply_batch_changes()
             return
         
@@ -1323,7 +1440,7 @@ Version 1.0"""
     # Update UI for batch editing
     def update_ui_for_batch(self):
         """Update UI to show or hide batch editing controls based on file selection state"""
-        checked_files = [fp for fp, checked in self.checked_files_state.items() if checked]
+        checked_files = [fp for fp, info in self.checked_files_state.items() if info.get('checked', False)]
         batch_fields_checked = any(var.get() for var in self.batch_field_vars.values())
         
         # Always update Save button text to show number of files
@@ -1344,7 +1461,9 @@ Version 1.0"""
     # Apply batch changes to multiple files
     def apply_batch_changes(self):
         """Apply changes from the main form to all checked files"""
-        files_to_process = [fp for fp, checked in self.checked_files_state.items() if checked]
+        files_to_process = [fp for fp, info in self.checked_files_state.items() 
+                            if isinstance(info, dict) and info.get('checked', False) or 
+                               isinstance(info, bool) and info]
         
         if not files_to_process:
             messagebox.showinfo("Info", "No files checked. Please check files in the list to batch edit.")

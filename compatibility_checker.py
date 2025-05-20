@@ -241,6 +241,31 @@ class CompatibilityChecker:
             'integrity': integrity_status
         }
     
+    def cleanup_resource_files(self, directory):
+        """Clean up macOS resource files (files starting with ._)
+        
+        Args:
+            directory: Directory to clean up
+            
+        Returns:
+            int: Number of resource files removed
+        """
+        if not os.path.isdir(directory):
+            return 0
+            
+        count = 0
+        for root, dirs, files in os.walk(directory):
+            for file in files:
+                if file.startswith('._'):
+                    try:
+                        full_path = os.path.join(root, file)
+                        os.remove(full_path)
+                        count += 1
+                        print(f"Removed macOS resource file: {full_path}")
+                    except Exception as e:
+                        print(f"Failed to remove resource file {file}: {str(e)}")
+        return count
+        
     def check_file_integrity(self, file_path, file_ext):
         """Check the integrity of an audio file
         
@@ -251,6 +276,15 @@ class CompatibilityChecker:
         Returns:
             dict: Integrity status information with repair suggestion if applicable
         """
+        # Skip macOS resource files
+        if os.path.basename(file_path).startswith('._'):
+            return {
+                "status": "Error",
+                "issues": ["macOS resource file"],
+                "can_repair": True,
+                "repair_method": "delete_resource_file"
+            }
+            
         result = {"status": "OK", "issues": [], "md5": "", "can_repair": False, "repair_method": None}
         
         try:
@@ -647,7 +681,14 @@ class CompatibilityChecker:
                 return {"success": False, "message": f"Failed to create backup: {str(e)}"}
             
             # Apply the appropriate repair method
-            if repair_method == "rebuild_mp3":
+            if repair_method == "delete_resource_file":
+                # Handle macOS resource files by deleting them
+                try:
+                    os.remove(file_path)
+                    result = {"success": True, "message": "Removed macOS resource file successfully"}
+                except Exception as e:
+                    result = {"success": False, "message": f"Failed to delete resource file: {str(e)}"}
+            elif repair_method == "rebuild_mp3":
                 result = self._repair_mp3(file_path)
             elif repair_method == "rebuild_flac":
                 result = self._repair_flac(file_path)
