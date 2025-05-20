@@ -818,6 +818,9 @@ Version 1.0"""
             # Ask user if they want to proceed with compatibility check
             if messagebox.askyesno("Scan Complete", 
                                   f"Found {len(audio_files)} audio files in {scanned_dirs} directories.\n\nProceed with compatibility check?"):
+                # Store file paths for compatibility checker to reference later
+                self.scan_file_paths = audio_files.copy()
+                
                 # Run compatibility check on all found files
                 self.check_compatibility_for_files(audio_files)
         

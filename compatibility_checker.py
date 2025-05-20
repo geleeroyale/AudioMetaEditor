@@ -505,9 +505,26 @@ class CompatibilityChecker:
             issue_count = len(results['issues'])
             warning_count = len(results['warnings'])
             
+            # Format the display name to be more readable
+            display_name = filename
+            if os.path.isabs(filename) and hasattr(self.parent, 'current_dir') and self.parent.current_dir:
+                # For full paths, show relative path if possible for better readability
+                try:
+                    # Try to make path relative to current directory
+                    rel_path = os.path.relpath(filename, self.parent.current_dir)
+                    # Don't show parent directory paths (with ..)
+                    if not rel_path.startswith('..'):
+                        display_name = rel_path
+                    else:
+                        # Just use the filename if it's outside current directory
+                        display_name = os.path.basename(filename)
+                except:
+                    # Fall back to basename if there's any error
+                    display_name = os.path.basename(filename)
+        
             status = "✓" if issue_count == 0 else f"❌ {issue_count} issues"
-            display_text = f"{filename} - {status}"
-            
+            display_text = f"{display_name} - {status}"
+        
             file_listbox.insert(tk.END, display_text)
             fixed_status[i] = False
             
@@ -575,12 +592,25 @@ class CompatibilityChecker:
             # Update header
             details_title.config(text=filename)
             
-            # Get full file path
+            # Get full file path - this handles both direct files and files from recursive scan
             full_path = None
-            for path in self.parent.checked_files_state.keys():
-                if os.path.basename(path) == filename:
-                    full_path = path
-                    break
+            
+            # First check if this might be a full path already (from recursive scan)
+            if os.path.isfile(filename):
+                full_path = filename
+            else:
+                # If not, try to find by basename in checked_files_state
+                for path in self.parent.checked_files_state.keys():
+                    if os.path.basename(path) == filename:
+                        full_path = path
+                        break
+                    
+                # If still not found, try to match against any loaded files (from recursive scan)
+                if not full_path and hasattr(self.parent, 'scan_file_paths'):
+                    for path in self.parent.scan_file_paths:
+                        if os.path.basename(path) == filename or path.endswith(filename):
+                            full_path = path
+                            break
             
             if not full_path:
                 ttk.Label(details_content, text="Error: Could not find file path", 
