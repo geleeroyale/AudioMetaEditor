@@ -3,7 +3,7 @@ name: Build and Release
 on:
   push:
     tags:
-      - 'v*' # Trigger on version tags (v1.0.0, v1.1.0, etc.)
+      - "v*" # Trigger on version tags (v1.0.0, v1.1.0, etc.)
 
 jobs:
   build:
@@ -34,7 +34,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v2
         with:
-          python-version: '3.8'
+          python-version: "3.8"
 
       - name: Install dependencies
         run: |
@@ -53,7 +53,7 @@ jobs:
           pyinstaller ${{ matrix.pyinstaller_args }} audio_metadata_editor.py
 
       - name: Upload executable as artifact
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v3
         with:
           name: ${{ matrix.asset_name }}
           path: ${{ matrix.executable_path }}
@@ -80,14 +80,14 @@ jobs:
           prerelease: false
           body: |
             ## AudioMetaEditor ${{ github.ref_name }}
-            
+
             ### Downloads
             - Windows: [AudioMetaEditor-Windows.exe](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/AudioMetaEditor-Windows.exe)
             - macOS: [AudioMetaEditor-macOS](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/AudioMetaEditor-macOS)
             - Linux: [AudioMetaEditor-Linux](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/AudioMetaEditor-Linux)
-            
+
             ### Changes
-            
+
             <!-- Add changelog here -->
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
