@@ -643,30 +643,69 @@ class CompatibilityChecker:
                 f.write(data[frame_start:])
             
             return {"success": True, "message": "MP3 file structure repaired successfully"}
-        
         except Exception as e:
             return {"success": False, "message": f"MP3 repair failed: {str(e)}"}
-    
     def _repair_flac(self, file_path):
         """Repair FLAC file with header or structural issues"""
         try:
-            # For FLAC, we'll try to extract the audio and rebuild the file
-            # This requires converting to WAV and back to FLAC
-            # First, create temporary files
-            temp_wav = file_path + ".temp.wav"
+            import subprocess
+            import tempfile
             
-            # Try to convert the corrupted FLAC to WAV using mutagen or external tools
-            # This is a simplified approach - in a real implementation you might
-            # use ffmpeg or another tool to do this conversion
+            # Create temporary files
+            temp_dir = tempfile.mkdtemp()
+            temp_wav = os.path.join(temp_dir, os.path.basename(file_path) + ".wav")
+            temp_flac = os.path.join(temp_dir, os.path.basename(file_path))
+            
+            repair_message = ""
+            
+            # Step 1: Try to use flac's built-in repair capability
             try:
-                # Try to read with mutagen first
-                audio = FLAC(file_path)
-                # If we got here, the file might be readable enough to fix
-                audio.save(file_path)
-                return {"success": True, "message": "FLAC file structure repaired successfully"}
-            except Exception:
-                # If mutagen can't handle it, we would need an external tool
-                return {"success": False, "message": "FLAC repair requires external tools (ffmpeg). Please reinstall the file."}
+                # Run flac with --keep-foreign-metadata to preserve as much as possible
+                subprocess.run(["flac", "--silent", "--decode", "--force", "--output-name", temp_wav, file_path], 
+                             check=True, stderr=subprocess.PIPE, stdout=subprocess.PIPE)
+                repair_message += "Successfully decoded FLAC to WAV. "
+                
+                # Re-encode the WAV back to FLAC with verified encoding
+                subprocess.run(["flac", "--silent", "--verify", "--best", "--output-name", temp_flac, temp_wav],
+                             check=True, stderr=subprocess.PIPE, stdout=subprocess.PIPE)
+                repair_message += "Successfully re-encoded to FLAC. "
+                
+                # If all went well, replace the original file
+                with open(temp_flac, 'rb') as src:
+                    with open(file_path, 'wb') as dst:
+                        dst.write(src.read())
+                
+                # Clean up temp files
+                import shutil
+                shutil.rmtree(temp_dir)
+                
+                # Validate the repaired file
+                try:
+                    audio = FLAC(file_path)
+                    # If we get here without exception, the file is readable
+                    return {"success": True, "message": f"FLAC file repaired using native FLAC tools. {repair_message}"}
+                except Exception as val_error:
+                    # Still issues after repair attempt
+                    return {"success": False, "message": f"Repair attempt completed but file still has issues: {str(val_error)}"}
+                    
+            except subprocess.CalledProcessError as p_error:
+                # Fall back to mutagen method if subprocess fails
+                try:
+                    # Try to read with mutagen
+                    audio = FLAC(file_path)
+                    # If we got here, the file might be readable enough to fix
+                    audio.save(file_path)
+                    return {"success": True, "message": "FLAC file header repaired successfully with mutagen"}
+                except Exception:
+                    # If all repair attempts fail
+                    return {"success": False, "message": f"FLAC repair failed with both methods. Error: {str(p_error)}"}
+                finally:
+                    # Clean up temp files
+                    import shutil
+                    try:
+                        shutil.rmtree(temp_dir)
+                    except Exception:
+                        pass
         
         except Exception as e:
             return {"success": False, "message": f"FLAC repair failed: {str(e)}"}
