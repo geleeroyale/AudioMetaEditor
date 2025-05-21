@@ -1052,6 +1052,19 @@ Version 1.0"""
                 # Store file paths for compatibility checker to reference later
                 self.scan_file_paths = audio_files.copy()
                 
+                # Set the current directory to the selected directory
+                self.current_dir = directory
+                
+                # Clear the file tree
+                for item in self.file_tree.get_children():
+                    self.file_tree.delete(item)
+                    
+                # Populate the file tree with the scanned files
+                self.populate_file_tree(audio_files)
+                
+                # Update status
+                self.status_var.set(f"Found {len(audio_files)} audio files in {scanned_dirs} directories")
+                
                 # Run compatibility check on all found files
                 self.check_compatibility_for_files(audio_files)
         
