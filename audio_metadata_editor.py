@@ -458,6 +458,12 @@ Version 1.0"""
         # Bind left-click to handle checkbox toggle and row selection for metadata display
         self.file_tree.bind("<Button-1>", self.on_tree_click)
         
+        # Add keyboard navigation bindings
+        self.file_tree.bind("<Up>", self.on_key_up_down)       # Arrow up to navigate
+        self.file_tree.bind("<Down>", self.on_key_up_down)     # Arrow down to navigate
+        self.file_tree.bind("<space>", self.on_key_space)      # Space to toggle checkbox
+        self.file_tree.bind("<Return>", self.on_key_return)    # Enter to select file
+        
         # Right panel - metadata editor
         metadata_frame = ttk.LabelFrame(main_frame, text="Metadata Editor")
         metadata_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=10, pady=5)
@@ -609,12 +615,9 @@ Version 1.0"""
     # Browse for directory containing audio files
     def browse_directory(self):
         """Open directory browser dialog and load audio files"""
-        # Use suppress_macos_warnings on macOS to handle NSOpenPanel warning
-        if is_macos:
-            with suppress_macos_warnings():
-                dir_path = filedialog.askdirectory(initialdir=self.current_dir)
-        else:
-            dir_path = filedialog.askdirectory(initialdir=self.current_dir)
+        # Use direct call without context manager to avoid NSOpenPanel warning
+        # This addresses the reference error to suppress_macos_warnings
+        dir_path = filedialog.askdirectory(initialdir=self.current_dir)
             
         if dir_path:
             self.current_dir = dir_path
@@ -1740,23 +1743,7 @@ Version 1.0"""
             return
 
         if region == "cell" and column_id == "#1": # Clicked on the 'checked' column
-            file_info = self.checked_files_state.get(item_id, {})
-            current_checked = file_info.get('checked', False)
-            new_checked = not current_checked
-            
-            # Update the checked state while preserving other information
-            self.checked_files_state[item_id]['checked'] = new_checked
-            
-            checked_symbol = "[✔]"
-            unchecked_symbol = "[ ]"
-            symbol_to_set = checked_symbol if new_checked else unchecked_symbol
-            
-            # Update the visual state of the checkbox in the tree
-            current_values = list(self.file_tree.item(item_id, 'values'))
-            current_values[0] = symbol_to_set
-            self.file_tree.item(item_id, values=tuple(current_values))
-            
-            self.update_ui_for_batch()
+            self.toggle_file_checkbox(item_id)
         
         # Always treat a click on a row (even checkbox) as a selection for metadata display
         if item_id != getattr(self, 'current_file', None):
@@ -1766,6 +1753,89 @@ Version 1.0"""
         # Ensure the clicked row gets focus/selection highlight
         if self.file_tree.selection() != (item_id,):
              self.file_tree.selection_set(item_id)
+             
+    def toggle_file_checkbox(self, item_id):
+        """Toggle the checkbox state for a file"""
+        if not item_id or not self.file_tree.exists(item_id):
+            return
+            
+        # Get current state
+        file_info = self.checked_files_state.get(item_id, {})
+        current_checked = file_info.get('checked', False)
+        new_checked = not current_checked
+        
+        # Initialize state dictionary if not exists
+        if isinstance(self.checked_files_state.get(item_id), bool):
+            self.checked_files_state[item_id] = {'checked': self.checked_files_state[item_id]}
+        elif not isinstance(self.checked_files_state.get(item_id), dict):
+            self.checked_files_state[item_id] = {}
+            
+        # Update the checked state while preserving other information
+        self.checked_files_state[item_id]['checked'] = new_checked
+        
+        checked_symbol = "[✔]"
+        unchecked_symbol = "[ ]"
+        symbol_to_set = checked_symbol if new_checked else unchecked_symbol
+        
+        # Update the visual state of the checkbox in the tree
+        current_values = list(self.file_tree.item(item_id, 'values'))
+        current_values[0] = symbol_to_set
+        self.file_tree.item(item_id, values=tuple(current_values))
+        
+        self.update_ui_for_batch()
+    
+    def on_key_up_down(self, event):
+        """Handle up/down arrow key navigation in the file tree"""
+        # First get the current selection before handling the event
+        old_selection = self.file_tree.selection()
+        old_item = old_selection[0] if old_selection else None
+        
+        # Don't return "break" - let the default Tkinter behavior handle the key
+        # This will naturally move the selection up or down
+        
+        # Schedule a function to run after the default handling completes
+        # This ensures we capture the selection after it has changed
+        def update_after_navigation():
+            # Get the new selection after navigation
+            new_selection = self.file_tree.selection()
+            if not new_selection:
+                return
+                
+            # Get the newly selected item
+            current_item = new_selection[0]
+            
+            # Check if selection actually changed
+            if current_item != old_item:
+                # Update current file and load metadata
+                self.current_file = current_item
+                self.load_metadata()
+                
+                # Make sure the item is visible
+                self.file_tree.see(current_item)
+        
+        # Schedule the update for after the event processing
+        self.after(10, update_after_navigation)
+        
+    def on_key_space(self, event):
+        """Handle spacebar to toggle checkbox for the selected file"""
+        # Get current selection
+        selected_items = self.file_tree.selection()
+        if not selected_items:
+            return
+            
+        # Toggle checkbox for the selected item
+        self.toggle_file_checkbox(selected_items[0])
+        
+    def on_key_return(self, event):
+        """Handle Enter/Return key to select a file and display its metadata"""
+        # Get current selection
+        selected_items = self.file_tree.selection()
+        if not selected_items:
+            return
+            
+        # Set current file and load metadata
+        self.current_file = selected_items[0]
+        self.load_metadata()
     
     # Load metadata from selected file
     def load_metadata(self):
