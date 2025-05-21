@@ -79,6 +79,7 @@ File integrity checking is included in the compatibility check and verifies:
 - Data consistency and coherence
 - File completeness (detecting truncated files)
 - MD5 checksum calculation for reference and duplicate identification
+- FLAC metadata cleanup (removes cue points, markers, and notes)
 - Path validation for both files and directories (can be toggled on/off)
   - Detection of filenames and directory names exceeding length limits
   - Detection of non-standard characters (allows A-Z, 0-9, spaces, and dashes)
@@ -97,7 +98,7 @@ You can enable or disable file integrity checking using the checkbox in the comp
 ### Cleanup macOS Resource Files
 
 1. Click "Tools > Delete macOS Resource Files"
-2. Select a directory containing resource files (.\_\*)
+2. Select a directory containing resource files
 3. Confirm the deletion when prompted
 
 ## Development

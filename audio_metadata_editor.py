@@ -2,34 +2,64 @@
 import os
 import sys
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
+from tkinter import ttk, messagebox
 from tkinter.scrolledtext import ScrolledText
 import threading
 import time
 import platform
 from typing import Dict, List, Optional, Tuple
 
-# Workaround for macOS NSOpenPanel warning
+# Platform detection
 is_macos = platform.system() == 'Darwin'
+
+# Import standard Tkinter file dialog
+from tkinter import filedialog
+
+# On macOS, suppress deprecation warnings
 if is_macos:
-    # Suppress NSOpenPanel warning on macOS
-    # This redirects stderr temporarily during file dialog operations
-    import contextlib
-    import io
-    import tempfile
+    os.environ['TK_SILENCE_DEPRECATION'] = '1'
     
-    @contextlib.contextmanager
+    # Create a more comprehensive filter for NSOpenPanel warnings
+    import io
+    from contextlib import contextmanager
+    
+    @contextmanager
+    def suppress_macos_warnings():
+        """Context manager to filter out common macOS GUI warnings"""
+        # Save the current stderr
+        original_stderr = sys.stderr
+        # Create a new stderr
+        sys.stderr = io.StringIO()
+        try:
+            yield
+        finally:
+            # Get any error messages
+            stderr_content = sys.stderr.getvalue()
+            # Filter out known macOS warnings
+            filtered_lines = []
+            for line in stderr_content.split('\n'):
+                # Skip NSOpenPanel identifier warnings
+                if 'NSOpenPanel' in line and 'identifier' in line:
+                    continue
+                # Skip NSWindow/NSPanel related warnings
+                if 'NSWindow' in line and 'overrides the method' in line:
+                    continue
+                # Include all other lines
+                if line.strip():
+                    filtered_lines.append(line)
+                    
+            filtered_content = '\n'.join(filtered_lines)
+            # Restore the original stderr
+            sys.stderr = original_stderr
+            # Print filtered content if any
+            if filtered_content.strip():
+                print(filtered_content, file=original_stderr)
+
+    # Keep old version for backward compatibility but just wrap our new version
     def suppress_stderr():
-        """Context manager to temporarily suppress stderr output."""
-        stderr_fd = sys.stderr.fileno()
-        with tempfile.NamedTemporaryFile(mode='w+') as tmp:
-            stderr_copy = os.dup(stderr_fd)
-            try:
-                os.dup2(tmp.fileno(), stderr_fd)
-                yield
-            finally:
-                os.dup2(stderr_copy, stderr_fd)
-                os.close(stderr_copy)
+        """Context manager to temporarily suppress stderr output. Uses the more comprehensive filter."""
+        with suppress_macos_warnings():
+            yield
 
 # Audio metadata processing
 import mutagen
@@ -362,6 +392,16 @@ Version 1.0"""
                              style="Secondary.TButton", width=15)
         delete_button.pack(side=tk.LEFT, padx=2, pady=2)
         
+        # Add Clean FLAC Comments button to the top toolbar
+        self.clean_flac_btn = ttk.Button(button_row1, text="Clean FLAC Comments", command=self.fix_flac_comments,
+                                        width=15)
+        self.clean_flac_btn.pack(side=tk.LEFT, padx=2, pady=2)
+        
+        # Add Auto-Fix Issues button to the top toolbar (initially not visible)
+        self.auto_fix_btn = ttk.Button(button_row1, text="Auto-Fix Issues", command=self.auto_fix_compatibility, 
+                                     style="Accent.TButton", width=15)
+        # Auto-fix button is not packed initially - it will be shown after compatibility check if issues are found
+        
         # Add Scan Directory Recursively button
         scan_dir_btn = ttk.Button(button_row2, text="Scan Directory Recursively", 
                                command=self.scan_directory_recursively, 
@@ -560,10 +600,7 @@ Version 1.0"""
         revert_btn = ttk.Button(btn_frame, text="Revert Changes", command=self.load_metadata, style="Secondary.TButton")
         revert_btn.pack(side=tk.LEFT, padx=6, pady=3)
         
-        # Auto-fix button (initially hidden, shown after compatibility check)
-        self.auto_fix_btn = ttk.Button(btn_frame, text="Auto-Fix Issues", command=self.auto_fix_compatibility, style="Accent.TButton")
-        self.auto_fix_btn.pack(side=tk.RIGHT, padx=6, pady=3)
-        self.auto_fix_btn.pack_forget()  # Initially hidden
+        # No additional toolbar needed - removed
         
         # Status bar at bottom
         status_bar = ttk.Label(self, textvariable=self.status_var, style="Status.TLabel")
@@ -572,9 +609,9 @@ Version 1.0"""
     # Browse for directory containing audio files
     def browse_directory(self):
         """Open directory browser dialog and load audio files"""
-        # Use suppress_stderr on macOS to avoid NSOpenPanel warning
+        # Use suppress_macos_warnings on macOS to handle NSOpenPanel warning
         if is_macos:
-            with suppress_stderr():
+            with suppress_macos_warnings():
                 dir_path = filedialog.askdirectory(initialdir=self.current_dir)
         else:
             dir_path = filedialog.askdirectory(initialdir=self.current_dir)
@@ -816,44 +853,132 @@ Version 1.0"""
         
         # Run the compatibility check on selected files
         self.check_compatibility_for_files(files_to_check)
-    
+        
     # Check compatibility of specific files
     def check_compatibility_for_files(self, files_to_check):
-        """Run compatibility check on specific files"""
+        """Run compatibility check on specific files with status log"""
         # Update status
-        self.status_var.set(f"Checking compatibility of {len(files_to_check)} files...")
+        self.status_var.set(f"Checking compatibility of {len(files_to_check)} files... Might take a while")
         self.update_idletasks()
         
-        # Use the compatibility checker to validate files
-        self.last_report_data, total_issues = self.compatibility_checker.check_compatibility(
-            files_to_check, self.read_metadata)
+        # Create a progress window to show scanning status
+        progress_window = tk.Toplevel(self)
+        progress_window.title("Compatibility Check Progress")
+        progress_window.geometry("600x400")
+        progress_window.transient(self)  # Set as transient to main window
+        progress_window.grab_set()  # Make window modal
+        progress_window.resizable(True, True)
         
-        # Update file status in our tracked state and update colors
-        for filename, results in self.last_report_data:
-            # Find the full path from the filename
-            for file_path in self.checked_files_state:
-                if os.path.basename(file_path) == filename:
-                    # Update the status based on check results
-                    if results.get('issues', []):
-                        self.checked_files_state[file_path]['status'] = 'problem'  # Red for problems
-                    elif results.get('warnings', []):
-                        self.checked_files_state[file_path]['status'] = 'optimizable'  # Yellow for warnings
-                    else:
-                        self.checked_files_state[file_path]['status'] = 'ok'  # Green for no issues
-                    break
+        # Create frame for progress display
+        progress_frame = ttk.Frame(progress_window, padding=10)
+        progress_frame.pack(fill=tk.BOTH, expand=True)
         
-        # Update the file tree with the new status colors
-        self.update_file_tree_colors()
+        # Add header
+        header_label = ttk.Label(progress_frame, text="Checking file compatibility...", font=("Arial", 12, "bold"))
+        header_label.pack(fill=tk.X, pady=(0, 10))
         
-        # Show Auto-Fix button if issues were found
-        if total_issues > 0:
-            self.auto_fix_btn.pack(side=tk.RIGHT, padx=(0,6), pady=3)
-        else:
-            self.auto_fix_btn.pack_forget()
+        # Add progress bar
+        progress_var = tk.DoubleVar(value=0)
+        progress_bar = ttk.Progressbar(progress_frame, variable=progress_var, mode="determinate", length=500)
+        progress_bar.pack(fill=tk.X, pady=(0, 10))
         
-        # Show the compatibility report
-        self.compatibility_checker.show_compatibility_report(self.last_report_data, total_issues)
-    
+        # Add status label
+        status_label = ttk.Label(progress_frame, text="Initializing...")
+        status_label.pack(fill=tk.X, pady=(0, 10))
+        
+        # Add log area with scrollbar
+        log_frame = ttk.Frame(progress_frame)
+        log_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # Create a scrolled text widget for the log
+        log_text = ScrolledText(log_frame, height=15, width=70, wrap=tk.WORD)
+        log_text.pack(fill=tk.BOTH, expand=True)
+        log_text.insert(tk.END, "Starting compatibility check...\n")
+        
+        # Update the UI
+        progress_window.update_idletasks()
+        
+        # Define callback function for status updates
+        def update_status(current, total, filename):
+            # Update progress bar
+            progress_value = (current / total) * 100
+            progress_var.set(progress_value)
+            
+            # Update status label
+            status_label.configure(text=f"Checking file {current} of {total}: {filename}")
+            
+            # Add to log
+            log_text.insert(tk.END, f"[{current}/{total}] Checking: {filename}\n")
+            log_text.see(tk.END)  # Scroll to bottom
+            
+            # Update UI
+            progress_window.update_idletasks()
+            
+        # Store the report and compatibility results
+        report_data = []
+        issues_count = 0
+            
+        try:
+            # Use the compatibility checker to validate files with the status callback
+            self.last_report_data, total_issues = self.compatibility_checker.check_compatibility(
+                files_to_check, self.read_metadata, update_status)
+            
+            # Add completion message to log
+            if total_issues > 0:
+                log_text.insert(tk.END, f"\nCompleted with {total_issues} issues found!\n")
+            else:
+                log_text.insert(tk.END, "\nCompleted successfully! No issues found.\n")
+            log_text.see(tk.END)
+            
+            # Update file status in our tracked state and update colors
+            for filename, results in self.last_report_data:
+                # Find the full path from the filename
+                for file_path in self.checked_files_state:
+                    if os.path.basename(file_path) == filename:
+                        # Update the status based on check results
+                        if results.get('issues', []):
+                            self.checked_files_state[file_path]['status'] = 'problem'  # Red for problems
+                        elif results.get('warnings', []):
+                            self.checked_files_state[file_path]['status'] = 'optimizable'  # Yellow for warnings
+                        else:
+                            self.checked_files_state[file_path]['status'] = 'ok'  # Green for no issues
+                        break
+            
+            # Update the file tree with the new status colors
+            self.update_file_tree_colors()
+            
+            # Show Auto-Fix button if issues were found
+            if total_issues > 0:
+                self.auto_fix_btn.pack(side=tk.LEFT, padx=2, pady=2)
+            else:
+                self.auto_fix_btn.pack_forget()
+                
+            # Add buttons to progress window
+            button_frame = ttk.Frame(progress_frame)
+            button_frame.pack(fill=tk.X, pady=10)
+            
+            # Close button
+            close_button = ttk.Button(button_frame, text="Close", command=progress_window.destroy)
+            close_button.pack(side=tk.RIGHT, padx=5)
+            
+            # View report button
+            view_report_button = ttk.Button(
+                button_frame, 
+                text="View Detailed Report", 
+                command=lambda: [progress_window.destroy(), 
+                                self.compatibility_checker.show_compatibility_report(self.last_report_data, total_issues)]
+            )
+            view_report_button.pack(side=tk.RIGHT, padx=5)
+            
+        except Exception as e:
+            # Log the error
+            log_text.insert(tk.END, f"\nError during compatibility check: {str(e)}\n")
+            log_text.see(tk.END)
+            
+            # Add close button
+            close_button = ttk.Button(progress_frame, text="Close", command=progress_window.destroy)
+            close_button.pack(pady=10)
+        
     # Recursively scan a directory for audio files and check compatibility
     def scan_directory_recursively(self):
         """Scan a directory recursively for audio files and check their compatibility"""
@@ -1112,7 +1237,7 @@ Version 1.0"""
         
         # Process each file
         def process_files():
-            nonlocal fixed_count, skipped_count, integrity_fixed_count, path_renamed_count
+            nonlocal fixed_count, skipped_count, integrity_fixed_count, path_renamed_count, dir_renamed_count
             
             add_log(f"Starting auto-fix process for {total_files} files...")
             
@@ -1204,6 +1329,41 @@ Version 1.0"""
                         
                 # Note: we've collected directory renaming tasks rather than doing them immediately
                 # to avoid breaking file paths during the file processing loop
+                
+                # Check for FLAC metadata to clean (cue points, notes, markers, comments, other tags)
+                flac_cleaned = False
+                if full_path.lower().endswith('.flac') and 'format_info' in results:
+                    format_info = results['format_info']
+                    needs_cleaning = (
+                        format_info.get('has_cue_sheet', False) or 
+                        format_info.get('has_markers', False) or 
+                        format_info.get('has_notes', False) or
+                        format_info.get('has_problematic_tags', False)
+                    )
+                    
+                    if needs_cleaning:
+                        add_log(f"🧹 FLAC file contains unwanted metadata - cleaning...")
+                        try:
+                            clean_result = self.compatibility_checker.clean_flac_metadata(full_path)
+                            
+                            if clean_result['success']:
+                                if clean_result['removed']:
+                                    removed_items = ', '.join(clean_result['removed'])
+                                    add_log(f"✅ Removed unwanted FLAC metadata: {removed_items}")
+                                    flac_cleaned = True
+                                    fixed_count += 1
+                                    
+                                    # Mark as fixed in our state
+                                    for path in self.checked_files_state:
+                                        if path == full_path:
+                                            self.checked_files_state[path]['fixed'] = True
+                                            break
+                                else:
+                                    add_log(f"ℹ️ No unwanted metadata found to clean")
+                            else:
+                                add_log(f"⚠️ {clean_result['message']}")
+                        except Exception as e:
+                            add_log(f"❌ Error during FLAC metadata cleaning: {str(e)}")
                 
                 # Check for file integrity issues
                 if self.compatibility_checker.perform_integrity_check.get() and 'integrity' in results:
@@ -1327,9 +1487,9 @@ Version 1.0"""
                             # Update any remaining entries in dirs_to_rename that might be subdirectories
                             updated_dirs_to_rename = {}
                             for d_path, d_name in self.dirs_to_rename.items():
-                                if d_path.startswith(dir_path + os.sep):
+                                if d_path.startswith(new_dir_path + os.sep):
                                     # This is a subdirectory of the renamed directory
-                                    rel_path = os.path.relpath(d_path, dir_path)
+                                    rel_path = os.path.relpath(d_path, new_dir_path)
                                     new_d_path = os.path.join(new_dir_path, rel_path)
                                     updated_dirs_to_rename[new_d_path] = d_name
                                 elif d_path != dir_path:  # Skip the directory we just renamed
@@ -1366,8 +1526,21 @@ Version 1.0"""
             button_frame.pack(pady=10, fill=tk.X)
             
             # Add close button with plenty of spacing
+            # Add a button to quickly fix comments
+            # Check for comment issues in the processed files
+            comment_issues = False
+            for _, results in self.last_report_data:
+                if 'format_info' in results and results.get('format_info', {}).get('has_problematic_tags', False):
+                    comment_issues = True
+                    break
+                    
+            if comment_issues:
+                fix_comments_button = ttk.Button(button_frame, text="Fix Comments", 
+                                               command=lambda: self.fix_flac_comments(full_path, progress_window))
+                fix_comments_button.pack(side=tk.LEFT, padx=5)
+            
             close_button = ttk.Button(button_frame, text="Close", command=progress_window.destroy)
-            close_button.pack(pady=10, padx=20)
+            close_button.pack(side=tk.RIGHT, padx=5)
             
             # Clean up any macOS resource files in the directory (only on macOS)
             if (fixed_count > 0 or integrity_fixed_count > 0) and self.is_macos:
@@ -1404,6 +1577,139 @@ Version 1.0"""
         
         # Hide auto-fix button until next compatibility check
         self.auto_fix_btn.pack_forget()
+    
+    def fix_flac_comments(self, file_path=None):
+        """Clean comments and problematic tags from FLAC files"""
+        if not file_path:
+            # If no file_path provided, get selected files
+            selected_items = self.file_tree.selection()
+            if not selected_items:
+                # Check if any files are checked
+                checked_files = [path for path, info in self.checked_files_state.items() 
+                                if isinstance(info, dict) and info.get('checked', False)]
+                
+                if not checked_files:
+                    messagebox.showinfo("No Files Selected", "Please select at least one FLAC file.")
+                    return
+                    
+                files_to_process = [f for f in checked_files if f.lower().endswith('.flac')]
+            else:
+                files_to_process = [f for f in selected_items if f.lower().endswith('.flac')]
+        else:
+            # Process just the single file provided
+            if not file_path.lower().endswith('.flac'):
+                messagebox.showinfo("Not a FLAC File", f"{os.path.basename(file_path)} is not a FLAC file.")
+                return
+            files_to_process = [file_path]
+            
+        if not files_to_process:
+            messagebox.showinfo("No FLAC Files", "No FLAC files were selected.")
+            return
+            
+        # Create progress window
+        progress_window = tk.Toplevel(self)
+        progress_window.title("FLAC Comment Cleaner")
+        progress_window.geometry("500x300")
+        progress_window.transient(self)
+        progress_window.grab_set()
+        
+        # Center the window
+        progress_window.update_idletasks()
+        width = progress_window.winfo_width()
+        height = progress_window.winfo_height()
+        x = self.winfo_x() + (self.winfo_width() - width) // 2
+        y = self.winfo_y() + (self.winfo_height() - height) // 2
+        progress_window.geometry(f"{width}x{height}+{x}+{y}")
+        
+        # Create a progress bar
+        progress_var = tk.DoubleVar()
+        progress_label = ttk.Label(progress_window, text="Preparing to clean FLAC comments...")
+        progress_label.pack(pady=10, padx=20, fill=tk.X)
+        progress_bar = ttk.Progressbar(progress_window, variable=progress_var, maximum=100)
+        progress_bar.pack(pady=10, padx=20, fill=tk.X)
+        
+        # Create a log frame
+        log_frame = ttk.LabelFrame(progress_window, text="Progress Log")
+        log_frame.pack(pady=10, padx=20, fill=tk.BOTH, expand=True)
+        
+        log_text = ScrolledText(log_frame, wrap=tk.WORD, height=10)
+        log_text.pack(pady=5, padx=5, fill=tk.BOTH, expand=True)
+        log_text.config(state=tk.DISABLED)
+        
+        # Function to add log entries
+        def add_log(message):
+            log_text.config(state=tk.NORMAL)
+            log_text.insert(tk.END, message + "\n")
+            log_text.see(tk.END)  # Scroll to end
+            log_text.config(state=tk.DISABLED)
+            log_text.update()  # Force update
+        
+        # Update progress
+        def update_progress(value, message):
+            progress_var.set(value)
+            progress_label.config(text=message)
+            progress_bar.update()
+            progress_label.update()
+            
+        # Process files function
+        def process_files():
+            cleaned_count = 0
+            skipped_count = 0
+            total_files = len(files_to_process)
+            
+            add_log(f"Starting FLAC comment cleaning for {total_files} files...")
+            
+            for idx, file_path in enumerate(files_to_process):
+                progress_value = (idx / total_files) * 100
+                update_progress(progress_value, f"Processing file {idx+1} of {total_files}: {os.path.basename(file_path)}")
+                
+                add_log(f"📄 Processing {os.path.basename(file_path)}...")
+                
+                try:
+                    # Use our compatibility checker to clean the FLAC file
+                    clean_result = self.compatibility_checker.clean_flac_metadata(file_path)
+                    
+                    if clean_result['success']:
+                        if clean_result['removed']:
+                            removed_items = ', '.join(clean_result['removed'])
+                            add_log(f"✅ Removed FLAC metadata: {removed_items}")
+                            cleaned_count += 1
+                            
+                            # Mark as fixed in our state
+                            if file_path in self.checked_files_state:
+                                self.checked_files_state[file_path]['fixed'] = True
+                                self.checked_files_state[file_path]['status'] = 'ok'
+                        else:
+                            add_log(f"ℹ️ No unwanted metadata found to clean")
+                            skipped_count += 1
+                    else:
+                        add_log(f"⚠️ {clean_result['message']}")
+                        skipped_count += 1
+                except Exception as e:
+                    add_log(f"❌ Error during FLAC metadata cleaning: {str(e)}")
+                    skipped_count += 1
+            
+            # Update progress bar to 100%
+            update_progress(100, "FLAC comment cleaning completed")
+            
+            # Show summary
+            add_log("\n=== Summary ===")
+            add_log(f"Total files processed: {total_files}")
+            add_log(f"Files successfully cleaned: {cleaned_count}")
+            add_log(f"Files skipped or failed: {skipped_count}")
+            
+            # Add close button
+            button_frame = ttk.Frame(progress_window)
+            button_frame.pack(pady=10, fill=tk.X)
+            
+            close_button = ttk.Button(button_frame, text="Close", command=progress_window.destroy)
+            close_button.pack(side=tk.RIGHT, padx=5)
+            
+            # Update the UI
+            self.update_file_tree_colors()
+            
+        # Start processing in a separate thread to keep UI responsive
+        threading.Thread(target=process_files, daemon=True).start()
     
     # Handle click on the file_tree Treeview
     def on_tree_click(self, event):
@@ -1507,21 +1813,43 @@ Version 1.0"""
     # Save metadata changes to file(s)
     def save_metadata(self):
         """Save metadata changes to the audio file or multiple checked files"""
+        print("\n====== DEBUG: save_metadata called ======")
+        
         # Check if we're in batch mode (multiple files checked + at least one batch field checkbox checked)
         checked_files = [fp for fp, info in self.checked_files_state.items() 
                         if isinstance(info, dict) and info.get('checked', False) or 
                            isinstance(info, bool) and info]
-        batch_fields_checked = any(var.get() for var in self.batch_field_vars.values())
+        print(f"DEBUG: Number of checked files: {len(checked_files)}")
         
+        # Check batch field vars
+        if hasattr(self, 'batch_field_vars'):
+            batch_fields_checked = any(var.get() for var in self.batch_field_vars.values())
+            print(f"DEBUG: Batch fields checked: {batch_fields_checked}")
+        else:
+            print("DEBUG: No batch_field_vars attribute found")
+            batch_fields_checked = False
+            # Initialize it to prevent errors
+            self.batch_field_vars = {}
+            
         # If in batch mode with multiple files, use the batch operation
         if checked_files and batch_fields_checked:
+            print("DEBUG: Using batch operation")
             self.apply_batch_changes()
             return
         
         # Regular single file edit
         if not hasattr(self, 'current_file') or not self.current_file:
+            print("DEBUG: No current file selected")
             messagebox.showinfo("Info", "No file selected")
             return
+        
+        # Make sure the current file exists
+        if not os.path.exists(self.current_file):
+            print(f"DEBUG: Current file does not exist: {self.current_file}")
+            messagebox.showerror("Error", f"File not found: {self.current_file}")
+            return
+            
+        print(f"DEBUG: Current file: {self.current_file}")
         
         try:
             self.status_var.set(f"Saving metadata to {os.path.basename(self.current_file)}...")
@@ -1537,14 +1865,33 @@ Version 1.0"""
                 'comment': self.comment_text.get(1.0, tk.END).strip()
             }
             
+            print(f"DEBUG: Collected metadata: {metadata}")
+            
             # Write metadata to file
+            print(f"DEBUG: Writing metadata to: {self.current_file}")
+            file_ext = os.path.splitext(self.current_file)[1].lower()
+            print(f"DEBUG: File extension: {file_ext}")
+            
+            # Make sure we recognize this file type
+            if file_ext not in ['.mp3', '.flac', '.wav', '.aaf']:
+                print(f"DEBUG: Unsupported file extension: {file_ext}")
+                messagebox.showerror("Error", f"Unsupported file type: {file_ext}")
+                return
+                
             result = self.write_metadata(self.current_file, metadata)
+            print(f"DEBUG: Write result: {result}")
             
             if result.get('success', False):
                 self.status_var.set(f"Metadata saved to {os.path.basename(self.current_file)}")
+                messagebox.showinfo("Success", f"Metadata saved to {os.path.basename(self.current_file)}")
+                
                 # Update current metadata
                 if hasattr(self, 'current_metadata'):
                     self.current_metadata.update(metadata)
+                    print("DEBUG: Updated current_metadata")
+                else:
+                    print("DEBUG: No current_metadata attribute found")
+                    self.current_metadata = metadata.copy()
                 
                 # If this file was the only checked file and batch fields were selected,
                 # reset the batch field checkboxes
@@ -1552,14 +1899,23 @@ Version 1.0"""
                     for var in self.batch_field_vars.values():
                         var.set(False)
                     self.update_ui_for_batch() # Update UI to reflect changes
+                    
+                # Refresh the metadata to confirm changes were saved
+                self.load_metadata()
             else:
                 error_message = result.get('error', 'Unknown error')
+                print(f"DEBUG: Error saving metadata: {error_message}")
                 messagebox.showerror("Error", f"Failed to save metadata: {error_message}")
                 self.status_var.set("Error saving metadata")
                 
         except Exception as e:
+            import traceback
+            traceback.print_exc()
+            print(f"DEBUG EXCEPTION: {str(e)}")
             messagebox.showerror("Error", f"Error saving metadata: {str(e)}")
             self.status_var.set("Error saving metadata")
+            
+        print("====== DEBUG: save_metadata completed ======\n")
     
     # Update UI for batch editing
     def update_ui_for_batch(self):

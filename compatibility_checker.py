@@ -27,22 +27,38 @@ class CompatibilityChecker:
         self.perform_integrity_check = tk.BooleanVar(value=False)  # Default disabled
         self.perform_path_validation = tk.BooleanVar(value=True)  # Default enabled
         
-    def check_compatibility(self, files_to_check, metadata_reader):
+    def check_compatibility(self, files_to_check, metadata_reader, status_callback=None):
         """Check compatibility of files against the Generic Strict Profile
         
         Args:
             files_to_check: List of file paths to check
             metadata_reader: Function to read metadata from files
+            status_callback: Optional callback function to report progress (file_index, total_files, current_file)
             
         Returns:
             tuple: (report_data, total_issues)
         """
         report_data = []
         total_issues = 0
+        total_files = len(files_to_check)
         
-        for file_path in files_to_check:
+        for idx, file_path in enumerate(files_to_check):
+            # Report progress if callback provided
+            if status_callback:
+                status_callback(idx + 1, total_files, os.path.basename(file_path))
+                
             metadata = metadata_reader(file_path)
-            results = self.validate_strict_profile(file_path, metadata)
+            
+            # Create a callback for integrity check status updates
+            def integrity_status_callback(checked_file, elapsed_time):
+                if status_callback:
+                    # Format the elapsed time nicely
+                    time_str = f"{elapsed_time:.2f} seconds"
+                    # Update the status with integrity check information
+                    status_callback(idx + 1, total_files, f"{os.path.basename(file_path)} (integrity check: {time_str})")
+            
+            # Run validation with integrity status callback
+            results = self.validate_strict_profile(file_path, metadata, integrity_status_callback)
             # Store the full path and the basename for display purposes
             results['full_path'] = file_path  # Store full path within results
             display_name = os.path.basename(file_path)  # For display in UI
@@ -275,16 +291,18 @@ class CompatibilityChecker:
         
         return issues, warnings, recommendations, can_rename, suggested_filename
         
-    def validate_strict_profile(self, file_path, metadata):
-        """Validate metadata against the Generic Strict Profile and check file integrity
+    def validate_strict_profile(self, file_path, metadata, integrity_status_callback=None):
+        """Validate a file against the Generic Strict Profile
         
         Args:
-            file_path: Path to the audio file
-            metadata: Dictionary containing metadata information
+            file_path: Path to the file to validate
+            metadata: Metadata dictionary for the file
+            integrity_status_callback: Optional callback to report integrity check status
             
         Returns:
-            dict: Results containing issues, warnings, recommendations, file integrity status and format info
+            Dictionary with validation results
         """
+        # Init results
         issues = []
         warnings = []
         recommendations = []
@@ -345,7 +363,7 @@ class CompatibilityChecker:
         
         # Perform file integrity check if enabled
         if self.perform_integrity_check.get():
-            integrity_status = self.check_file_integrity(file_path, file_ext)
+            integrity_status = self.check_file_integrity(file_path, file_ext, integrity_status_callback)
         
         # Add integrity issues to the main issues list
         if integrity_status["status"] != "OK":
@@ -358,8 +376,8 @@ class CompatibilityChecker:
                 elif "header" in integrity_issue.lower():
                     recommendations.append("This file has header issues that may cause playback problems")
             
-            # Add MD5 checksum to format info if calculated successfully
-            if integrity_status["md5"]:
+            # Add MD5 checksum to format info if calculated successfully and if the key exists
+            if "md5" in integrity_status and integrity_status["md5"]:
                 format_info['md5_checksum'] = integrity_status["md5"]
         
         # Format-specific checks
@@ -410,6 +428,108 @@ class CompatibilityChecker:
                     warnings.append(f"High bit depth: {audio.info.bits_per_sample}-bit")
                     recommendations.append("Bit depths above 24-bit may not be supported by all players")
                     
+                # Check for cue points, notes, markers, and other non-standard metadata in FLAC files
+                has_cue_sheet = False
+                has_markers = False
+                has_notes = False
+                has_seektable = False
+                has_problematic_tags = False
+                problematic_tags = []
+                
+                # FLAC metadata can be in several forms:
+                # 1. Standard FLAC metadata blocks (CUESHEET, SEEKTABLE, etc.)
+                # 2. Vorbis comments - stored in audio's dictionary interface
+                # 3. Application blocks - can contain custom data
+                
+                # Check for standard metadata blocks
+                try:
+                    # Check for CUESHEET blocks
+                    if hasattr(audio, 'cuesheet') and audio.cuesheet is not None:
+                        has_cue_sheet = True
+                        warnings.append("Contains embedded cue sheet")
+                        recommendations.append("Embedded cue sheets may not be supported by all players")
+                    
+                    # Check for SEEKTABLE (standard but not always necessary)
+                    if hasattr(audio, 'seektable') and audio.seektable is not None:
+                        has_seektable = True
+                except Exception:
+                    pass  # Ignore errors in accessing FLAC blocks
+                
+                # Keywords that indicate problematic tags
+                marker_keywords = ['MARKER', 'CUE', 'POINT', 'HOTCUE', 'POSITION', 'LOOP', 'BEAT', 'WAVEFORM', 'TIME']
+                note_keywords = ['NOTE', 'EDITOR', 'EDITORIAL', 'SESSION']
+                comment_keywords = ['COMMENT', 'DESCRIPTION', 'REMARKS']
+                daw_keywords = ['REAPER', 'PROTOOLS', 'ABLETON', 'LOGIC', 'SERATO', 'TRAKTOR', 'REKORDBOX', 'CDJ']
+                
+                # Check all tags for problematic content
+                for key in audio.keys():
+                    key_upper = key.upper()
+                    
+                    # Check for marker-related tags
+                    if any(keyword in key_upper for keyword in marker_keywords):
+                        has_markers = True
+                        problematic_tags.append(key)
+                        
+                    # Check for note-related tags
+                    elif any(keyword in key_upper for keyword in note_keywords):
+                        has_notes = True
+                        problematic_tags.append(key)
+                        
+                    # Check for comment-related tags
+                    elif any(keyword in key_upper for keyword in comment_keywords):
+                        has_notes = True  # We track comments as notes for status purposes
+                        problematic_tags.append(key)
+                        
+                    # Check for DAW-specific tags
+                    elif any(keyword in key_upper for keyword in daw_keywords):
+                        has_problematic_tags = True
+                        problematic_tags.append(key)
+                        
+                    # Check for custom application blocks (often used by DAWs)
+                    elif key_upper.startswith('APPLICATION') or key_upper.startswith('APPL'):
+                        has_problematic_tags = True
+                        problematic_tags.append(key)
+                        
+                    # Check for SEEKTABLE in Vorbis comments (non-standard)
+                    elif key_upper == 'SEEKTABLE':
+                        has_seektable = True
+                        problematic_tags.append(key)
+                
+                # Add warnings based on problematic tags
+                if has_markers or any(keyword in ' '.join(problematic_tags).upper() for keyword in marker_keywords):
+                    warnings.append(f"Contains markers or cue points")
+                    recommendations.append("Audio markers may not be supported by all players")
+                    
+                if has_notes or any(keyword in ' '.join(problematic_tags).upper() for keyword in note_keywords):
+                    warnings.append(f"Contains editorial notes")
+                    recommendations.append("Editorial notes may not be compatible with all players")
+                    
+                # Specifically handle comments as their own category
+                if any(keyword in ' '.join(problematic_tags).upper() for keyword in comment_keywords):
+                    warnings.append(f"Contains comments that should be cleaned")
+                    recommendations.append("Comments may contain unwanted metadata and should be removed")
+                    
+                if has_problematic_tags or any(keyword in ' '.join(problematic_tags).upper() for keyword in daw_keywords):
+                    warnings.append(f"Contains DAW-specific metadata")
+                    recommendations.append("DAW-specific tags may cause issues with some players")
+                    
+                # Debug info - show all detected problematic tags
+                if problematic_tags:
+                    if len(problematic_tags) > 5:
+                        tag_display = ', '.join(problematic_tags[:5]) + f" and {len(problematic_tags)-5} more"
+                    else:
+                        tag_display = ', '.join(problematic_tags)
+                    recommendations.append(f"Problematic tags detected: {tag_display}")
+                    has_problematic_tags = True
+                
+                # Store additional FLAC metadata in format_info for use in fixing
+                format_info['has_cue_sheet'] = has_cue_sheet
+                format_info['has_markers'] = has_markers
+                format_info['has_notes'] = has_notes
+                format_info['has_seektable'] = has_seektable
+                format_info['has_problematic_tags'] = has_problematic_tags
+                format_info['problematic_tags'] = problematic_tags
+                
                 # Check for uncommon channel configurations
                 if audio.info.channels > 2:
                     warnings.append(f"Multichannel audio: {audio.info.channels} channels")
@@ -502,6 +622,128 @@ class CompatibilityChecker:
                 'suggested_dirname': suggested_dirname if self.perform_path_validation.get() else None
             }
         }
+    
+    def clean_flac_metadata(self, file_path):
+        """Remove unwanted metadata blocks from FLAC files (cue sheets, markers, notes)
+        
+        Args:
+            file_path: Path to the FLAC file to clean
+            
+        Returns:
+            dict: Result of the cleaning operation
+        """
+        result = {"success": False, "message": "", "removed": []}
+        
+        try:
+            # Check if this is a FLAC file
+            if not file_path.lower().endswith('.flac'):
+                result["message"] = "Not a FLAC file, skipping metadata cleaning"
+                return result
+                
+            # Open the FLAC file using both Mutagen's FLAC and File interfaces for maximum coverage
+            from mutagen.flac import FLAC
+            from mutagen import File
+            audio = FLAC(file_path)
+            
+            # Keywords that indicate problematic tags - same as in validation
+            marker_keywords = ['MARKER', 'CUE', 'POINT', 'HOTCUE', 'POSITION', 'LOOP', 'BEAT', 'WAVEFORM', 'TIME']
+            note_keywords = ['NOTE', 'EDITOR', 'EDITORIAL', 'SESSION']
+            comment_keywords = ['COMMENT', 'DESCRIPTION', 'REMARKS']
+            daw_keywords = ['REAPER', 'PROTOOLS', 'ABLETON', 'LOGIC', 'SERATO', 'TRAKTOR', 'REKORDBOX', 'CDJ']
+            
+            # Elements to remove - track both Vorbis comments and FLAC metadata blocks
+            remove_keys = []
+            
+            # STEP 1: Remove problematic Vorbis comments (tags)
+            for key in list(audio.keys()):
+                key_upper = key.upper()
+                should_remove = False
+                
+                # Check for marker-related tags
+                if any(keyword in key_upper for keyword in marker_keywords):
+                    result["removed"].append(f"markers ({key})")
+                    should_remove = True
+                # Check for note-related tags
+                elif any(keyword in key_upper for keyword in note_keywords):
+                    result["removed"].append(f"notes ({key})")
+                    should_remove = True
+                # Check for comment-related tags
+                elif any(keyword in key_upper for keyword in comment_keywords):
+                    result["removed"].append(f"comments ({key})")
+                    should_remove = True
+                # Check for DAW-specific tags
+                elif any(keyword in key_upper for keyword in daw_keywords):
+                    result["removed"].append(f"DAW metadata ({key})")
+                    should_remove = True
+                # Check for application blocks
+                elif key_upper.startswith('APPLICATION') or key_upper.startswith('APPL'):
+                    result["removed"].append(f"application data ({key})")
+                    should_remove = True
+                # Check for CUESHEET and SEEKTABLE in Vorbis comments
+                elif key_upper == 'CUESHEET':
+                    result["removed"].append("cue sheet")
+                    should_remove = True
+                elif key_upper == 'SEEKTABLE':
+                    result["removed"].append("seektable")
+                    should_remove = True
+                    
+                if should_remove:
+                    remove_keys.append(key)
+            
+            # Remove all identified problematic keys
+            for key in remove_keys:
+                del audio[key]
+            
+            # STEP 2: Remove FLAC metadata blocks (requires a more direct approach)
+            try:
+                # We need to create a new FLAC file without the problematic blocks
+                # First, check for standard CUESHEET block and remove it by recreating the file
+                has_cuesheet = False
+                
+                # Re-load the file to get access to the FLAC blocks
+                full_audio = File(file_path)
+                if hasattr(full_audio, 'cuesheet') and full_audio.cuesheet is not None:
+                    has_cuesheet = True
+                    result["removed"].append("embedded FLAC cuesheet block")
+                    
+                # If we found a CUESHEET block, we need to recreate the file without it
+                if has_cuesheet:
+                    # Save the file to flush the changes we made in step 1
+                    audio.save()
+                    
+                    # Now use flac command line tool to remove CUESHEET block if available
+                    try:
+                        import subprocess
+                        # Check if flac is available
+                        try:
+                            subprocess.run(['flac', '--version'], capture_output=True, check=False)
+                            # Run flac with --dont-use-padding to remove cuesheet
+                            subprocess.run(['flac', '--dont-use-padding', '--preserve-modtime', 
+                                        '--totally-silent', '-f', file_path], 
+                                      capture_output=True, check=False)
+                        except FileNotFoundError:
+                            # No flac command line tool, we'll rely on our Mutagen changes
+                            pass
+                    except Exception:
+                        # Ignore errors with subprocess, we'll continue with our regular approach
+                        pass
+            except Exception as e:
+                # Ignore errors in block removal - we'll use the tag removal we did in step 1
+                print(f"Warning: Error during FLAC block removal: {str(e)}")
+            
+            # STEP 3: Save the final version with all our changes
+            if remove_keys or has_cuesheet:
+                audio.save()
+                result["success"] = True
+                result["message"] = f"Successfully cleaned FLAC file, removed {len(result['removed'])} metadata elements"
+            else:
+                result["success"] = True
+                result["message"] = "No unwanted metadata found to clean"
+                
+        except Exception as e:
+            result["message"] = f"Error cleaning FLAC metadata: {str(e)}"
+            
+        return result
     
     def rename_directory(self, dir_path, new_dirname):
         """Rename a directory with a safer name
@@ -614,16 +856,20 @@ class CompatibilityChecker:
                         print(f"Failed to remove resource file {file}: {str(e)}")
         return count
         
-    def check_file_integrity(self, file_path, file_ext):
+    def check_file_integrity(self, file_path, file_ext, status_callback=None):
         """Check the integrity of an audio file
         
         Args:
             file_path: Path to the audio file
             file_ext: File extension (lowercase)
-            
+            status_callback: Optional callback function to report integrity check progress
+        
         Returns:
             dict: Integrity status information with repair suggestion if applicable
         """
+        # Start timing the integrity check
+        start_time = time.time()
+        
         # Skip macOS resource files
         if os.path.basename(file_path).startswith('._'):
             return {
@@ -766,6 +1012,14 @@ class CompatibilityChecker:
             result["status"] = "Error"
             result["issues"].append(f"Integrity check error: {str(e)}")
         
+        # Calculate elapsed time
+        elapsed_time = time.time() - start_time
+        result["check_time"] = elapsed_time
+        
+        # Update status callback if provided
+        if status_callback:
+            status_callback(file_path, elapsed_time)
+            
         return result
 
     def fix_metadata(self, file_path, field, value, list_index, listbox, fixed_status):
@@ -1679,7 +1933,7 @@ class CompatibilityChecker:
                 status_value.pack(side=tk.LEFT)
                 
                 # Display MD5 checksum if available
-                if results['integrity']['md5']:
+                if 'integrity' in results and 'md5' in results['integrity'] and results['integrity']['md5']:
                     md5_frame = ttk.Frame(integrity_frame)
                     md5_frame.pack(fill=tk.X, pady=1)
                     
