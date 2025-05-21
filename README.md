@@ -2,7 +2,7 @@
 
 A cross-platform desktop application for editing and managing metadata in audio files.
 
-![Audio Metadata Editor Screenshot](screenshot.png)
+![Audio Metadata Editor Screenshot](screenrecording.gif)
 
 > **⚠️ DISCLAIMER**: This application requires access to your file system to read and modify audio files. Please use caution when selecting files or directories to modify, and always maintain backups of important files before making changes. The application will only modify files you explicitly select or check.
 
