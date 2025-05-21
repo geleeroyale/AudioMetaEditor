@@ -79,6 +79,12 @@ File integrity checking is included in the compatibility check and verifies:
 - Data consistency and coherence
 - File completeness (detecting truncated files)
 - MD5 checksum calculation for reference and duplicate identification
+- Path validation for both files and directories (can be toggled on/off)
+  - Detection of filenames and directory names exceeding length limits
+  - Detection of non-standard characters (allows A-Z, 0-9, spaces, and dashes)
+  - Warning for accented characters that may cause cross-platform issues
+  - Smart auto-fix that fixes files first, then safely renames directories afterward
+  - Automatic transliteration of accented characters during renaming
 
 You can enable or disable file integrity checking using the checkbox in the compatibility check dialog.
 

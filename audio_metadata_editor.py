@@ -373,6 +373,11 @@ Version 1.0"""
                                        variable=self.compatibility_checker.perform_integrity_check)
         integrity_check.pack(side=tk.LEFT, padx=(10, 2), pady=2)
         
+        # Add path validation checkbox
+        path_validation = ttk.Checkbutton(button_row2, text="Enable Path Validation", 
+                                      variable=self.compatibility_checker.perform_path_validation)
+        path_validation.pack(side=tk.LEFT, padx=(10, 2), pady=2)
+        
         # File list with scrollbar
         file_frame = ttk.Frame(browser_frame)
         file_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
@@ -1099,11 +1104,15 @@ Version 1.0"""
         fixed_count = 0
         skipped_count = 0
         integrity_fixed_count = 0
+        path_renamed_count = 0
+        dir_renamed_count = 0
+        # Initialize dictionary to track directories that need renaming
+        self.dirs_to_rename = {}  # Format: {directory_path: suggested_new_name}
         total_files = len(self.last_report_data)
         
         # Process each file
         def process_files():
-            nonlocal fixed_count, skipped_count, integrity_fixed_count
+            nonlocal fixed_count, skipped_count, integrity_fixed_count, path_renamed_count
             
             add_log(f"Starting auto-fix process for {total_files} files...")
             
@@ -1111,15 +1120,11 @@ Version 1.0"""
                 progress_value = (idx / total_files) * 100
                 update_progress(progress_value, f"Processing file {idx+1} of {total_files}: {filename}")
                 
-                full_path = None
-                # Find the full path from the filename
-                for path in self.checked_files_state.keys():
-                    if os.path.basename(path) == filename:
-                        full_path = path
-                        break
+                # Get the full path directly from the results
+                full_path = results.get('full_path')
                 
-                if not full_path:
-                    add_log(f"⚠️ Skipping {filename}: Could not determine full path")
+                if not full_path or not os.path.exists(full_path):
+                    add_log(f"⚠️ Skipping {filename}: Invalid file path or file not found")
                     skipped_count += 1
                     continue
                 
@@ -1147,6 +1152,58 @@ Version 1.0"""
                         add_log(f"❌ Error deleting file: {str(e)}")
                         skipped_count += 1
                         continue  # Skip to next file
+                        
+                # First check for filename issues that require renaming
+                file_renamed = False
+                if 'path' in results and results['path'].get('can_rename', False) and \
+                   results['path'].get('suggested_filename'):
+                    
+                    suggested_name = results['path']['suggested_filename']
+                    add_log(f"📝 File path issue detected - attempting to rename to {suggested_name}...")
+                    
+                    try:
+                        # Use compatibility checker to rename the file
+                        rename_result = self.compatibility_checker.rename_file(full_path, suggested_name)
+                        
+                        if rename_result['success']:
+                            add_log(f"✅ {rename_result['message']}")
+                            # Update our reference to the file path
+                            old_path = full_path
+                            full_path = rename_result['new_path']
+                            
+                            # Update our checked files state
+                            if old_path in self.checked_files_state:
+                                # Copy the state information to the new path
+                                self.checked_files_state[full_path] = self.checked_files_state[old_path].copy()
+                                # Mark as fixed
+                                self.checked_files_state[full_path]['fixed'] = True
+                                # Delete the old path entry
+                                del self.checked_files_state[old_path]
+                                
+                            file_renamed = True
+                            path_renamed_count += 1    # Track renamed files separately
+                            fixed_count += 1           # Also count as a general fix
+                        else:
+                            add_log(f"⚠️ {rename_result['message']}")
+                    except Exception as e:
+                        add_log(f"❌ Error renaming file: {str(e)}")
+                        skipped_count += 1
+                
+                # After fixing the file, check if we need to process directory renaming
+                # (We'll defer directory renaming to a later stage to avoid path issues)
+                # Just store directories that need renaming for now
+                if self.compatibility_checker.perform_path_validation.get() and 'path' in results and \
+                   results['path'].get('dir_can_rename', False) and results['path'].get('suggested_dirname') and \
+                   results['path'].get('dir_path'):
+                    
+                    # Instead of renaming immediately, we'll collect directories to rename later
+                    dir_path = results['path']['dir_path'] 
+                    if dir_path not in self.dirs_to_rename:
+                        self.dirs_to_rename[dir_path] = results['path']['suggested_dirname']
+                        add_log(f"📝 Directory '{os.path.basename(dir_path)}' needs renaming (will be processed after files)")
+                        
+                # Note: we've collected directory renaming tasks rather than doing them immediately
+                # to avoid breaking file paths during the file processing loop
                 
                 # Check for file integrity issues
                 if self.compatibility_checker.perform_integrity_check.get() and 'integrity' in results:
@@ -1232,6 +1289,63 @@ Version 1.0"""
                 else:
                     add_log(f"ℹ️ No changes required for {filename}")
             
+            # Now that all files are processed, we can safely rename directories without breaking paths
+            if self.dirs_to_rename and self.compatibility_checker.perform_path_validation.get():
+                add_log("\n📂 Processing directories that need renaming...")
+                # Sort directories by depth (deepest first) to handle nested directories correctly
+                dirs_sorted = sorted(self.dirs_to_rename.keys(), key=lambda x: len(x.split(os.sep)), reverse=True)
+                
+                for dir_path in dirs_sorted:
+                    suggested_dirname = self.dirs_to_rename[dir_path]
+                    add_log(f"📝 Directory '{os.path.basename(dir_path)}' - attempting to rename to '{suggested_dirname}'...")
+                    
+                    try:
+                        # Use compatibility checker to rename the directory
+                        dir_rename_result = self.compatibility_checker.rename_directory(dir_path, suggested_dirname)
+                        
+                        if dir_rename_result['success']:
+                            add_log(f"✅ {dir_rename_result['message']}")
+                            
+                            # Update paths for all files in this directory
+                            new_dir_path = dir_rename_result['new_path']
+                            
+                            # Update state tracking for all files in this directory
+                            updated_state = {}
+                            for path, state in self.checked_files_state.items():
+                                if path.startswith(dir_path + os.sep):
+                                    # This is a file in the renamed directory, update its path
+                                    rel_path = os.path.relpath(path, dir_path)
+                                    new_path = os.path.join(new_dir_path, rel_path)
+                                    updated_state[new_path] = state
+                                else:
+                                    # Keep other files as they are
+                                    updated_state[path] = state
+                            
+                            # Replace the old state with the updated one
+                            self.checked_files_state = updated_state
+                            
+                            # Update any remaining entries in dirs_to_rename that might be subdirectories
+                            updated_dirs_to_rename = {}
+                            for d_path, d_name in self.dirs_to_rename.items():
+                                if d_path.startswith(dir_path + os.sep):
+                                    # This is a subdirectory of the renamed directory
+                                    rel_path = os.path.relpath(d_path, dir_path)
+                                    new_d_path = os.path.join(new_dir_path, rel_path)
+                                    updated_dirs_to_rename[new_d_path] = d_name
+                                elif d_path != dir_path:  # Skip the directory we just renamed
+                                    updated_dirs_to_rename[d_path] = d_name
+                            
+                            self.dirs_to_rename = updated_dirs_to_rename
+                            
+                            dir_renamed_count += 1
+                            fixed_count += 1
+                        else:
+                            add_log(f"⚠️ {dir_rename_result['message']}")
+                            skipped_count += 1
+                    except Exception as e:
+                        add_log(f"❌ Error renaming directory: {str(e)}")
+                        skipped_count += 1
+            
             # Update progress bar to 100%
             update_progress(100, "Auto-fix process completed")
             
@@ -1241,7 +1355,11 @@ Version 1.0"""
             add_log(f"Files successfully fixed: {fixed_count}")
             if integrity_fixed_count > 0:
                 add_log(f"Files with repaired integrity: {integrity_fixed_count}")
-            add_log(f"Files skipped or failed: {skipped_count}")
+            if path_renamed_count > 0:
+                add_log(f"Files with renamed paths: {path_renamed_count}")
+            if dir_renamed_count > 0:
+                add_log(f"Directories renamed: {dir_renamed_count}")
+            add_log(f"Items skipped or failed: {skipped_count}")
             
             # Add a frame for the close button to ensure proper positioning
             button_frame = ttk.Frame(progress_window)

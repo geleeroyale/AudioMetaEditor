@@ -25,6 +25,7 @@ class CompatibilityChecker:
         """Initialize the compatibility checker with a parent application"""
         self.parent = parent
         self.perform_integrity_check = tk.BooleanVar(value=False)  # Default disabled
+        self.perform_path_validation = tk.BooleanVar(value=True)  # Default enabled
         
     def check_compatibility(self, files_to_check, metadata_reader):
         """Check compatibility of files against the Generic Strict Profile
@@ -42,11 +43,238 @@ class CompatibilityChecker:
         for file_path in files_to_check:
             metadata = metadata_reader(file_path)
             results = self.validate_strict_profile(file_path, metadata)
-            report_data.append((os.path.basename(file_path), results))
+            # Store the full path and the basename for display purposes
+            results['full_path'] = file_path  # Store full path within results
+            display_name = os.path.basename(file_path)  # For display in UI
+            report_data.append((display_name, results))
             total_issues += len(results['issues'])
             
         return report_data, total_issues
     
+    def check_directory_path(self, dir_path):
+        """Check a directory path for naming issues
+        
+        Args:
+            dir_path: Path to the directory to check
+            
+        Returns:
+            tuple: (issues, warnings, recommendations, can_rename, suggested_dirname)
+        """
+        issues = []
+        warnings = []
+        recommendations = []
+        can_rename = False
+        suggested_dirname = None
+        
+        # Skip if path validation is disabled
+        if not self.perform_path_validation.get():
+            return issues, warnings, recommendations, can_rename, suggested_dirname
+        
+        # Get directory name
+        dir_name = os.path.basename(dir_path)
+        parent_dir = os.path.dirname(dir_path)
+        
+        # Skip root directories or empty names
+        if not dir_name or dir_path == '/' or dir_path == '//' or dir_path == '\\' or dir_path == '\\':
+            return issues, warnings, recommendations, can_rename, suggested_dirname
+        
+        # Check directory name length
+        MAX_DIRNAME_LENGTH = 100
+        if len(dir_name) > MAX_DIRNAME_LENGTH:
+            issues.append(f"Directory name exceeds {MAX_DIRNAME_LENGTH} characters")
+            recommendations.append("Consider shortening directory names for better compatibility")
+            can_rename = True
+        
+        # Check for non-standard characters in directory name
+        import re
+        import unicodedata
+        
+        # Find problematic characters
+        invalid_chars = []
+        accented_chars = []
+        
+        for char in dir_name:
+            # Skip allowed characters
+            if re.match(r'[0-9a-zA-Z\- ]', char):
+                continue
+                
+            # Detect accented characters
+            category = unicodedata.category(char)
+            if category.startswith('L'):  # Letter category
+                if char not in accented_chars:
+                    accented_chars.append(char)
+            elif char not in invalid_chars:
+                invalid_chars.append(char)
+        
+        # Report accented characters
+        if accented_chars:
+            char_list = ', '.join([f"'{c}'" for c in accented_chars])
+            warnings.append(f"Directory name contains accented characters: {char_list}")
+            recommendations.append("Accented characters may cause issues on some systems")
+            can_rename = True
+            
+        # Report invalid characters
+        if invalid_chars:
+            char_list = ', '.join([f"'{c}'" for c in invalid_chars])
+            issues.append(f"Directory name contains special characters: {char_list}")
+            recommendations.append("Use only numbers, letters, spaces, and dashes for best compatibility")
+            can_rename = True
+            
+        # Generate suggested dirname if needed
+        if can_rename:
+            import re
+            import unicodedata
+            
+            # Create safe directory name by normalizing and transliterating accented characters
+            safe_dirname = ""
+            
+            # First, normalize and attempt to convert accented characters to ASCII
+            normalized = unicodedata.normalize('NFKD', dir_name)
+            for char in normalized:
+                # Skip combining characters (used to create accents)
+                if unicodedata.category(char).startswith('M'):
+                    continue
+                    
+                # Keep alphanumeric chars, spaces, and dashes
+                if re.match(r'[0-9a-zA-Z\- ]', char):
+                    safe_dirname += char
+                else:
+                    # Skip other characters
+                    pass
+            
+            # If resulting dirname is empty, use a fallback name
+            if not safe_dirname.strip():
+                safe_dirname = "folder"
+                
+            # Remove consecutive spaces and dashes
+            safe_dirname = re.sub(r'[ ]+', ' ', safe_dirname)  # Collapse multiple spaces
+            safe_dirname = re.sub(r'-+', '-', safe_dirname)    # Collapse multiple dashes
+            
+            # Remove leading/trailing spaces and dashes
+            safe_dirname = safe_dirname.strip('- ')
+            
+            # Truncate if still too long
+            if len(safe_dirname) > MAX_DIRNAME_LENGTH:
+                safe_dirname = safe_dirname[:MAX_DIRNAME_LENGTH - 3] + '...'  # Add ellipsis
+                
+            suggested_dirname = safe_dirname
+            
+        return issues, warnings, recommendations, can_rename, suggested_dirname
+    
+    def check_path_issues(self, file_path):
+        """Check for file path related issues (length, special characters, etc.)
+        
+        Args:
+            file_path: Full path to the audio file
+            
+        Returns:
+            tuple: (issues, warnings, recommendations, can_rename, suggested_filename)
+        """
+        issues = []
+        warnings = []
+        recommendations = []
+        can_rename = False
+        suggested_filename = None
+        
+        # Get file and directory information
+        file_basename = os.path.basename(file_path)
+        file_name, file_ext = os.path.splitext(file_basename)
+        dir_path = os.path.dirname(file_path)
+        
+        # Check for path length issues (Windows has ~260 char limit by default)
+        MAX_PATH_LENGTH = 250
+        MAX_FILENAME_LENGTH = 100
+        if len(file_path) > MAX_PATH_LENGTH:
+            issues.append(f"File path exceeds {MAX_PATH_LENGTH} characters")
+            recommendations.append("Shorten the file path for better compatibility across systems")
+        
+        # Check filename length
+        if len(file_basename) > MAX_FILENAME_LENGTH:
+            issues.append(f"Filename exceeds {MAX_FILENAME_LENGTH} characters")
+            recommendations.append("Consider shortening the filename")
+            can_rename = True
+        
+        # Only perform character validation if the option is enabled
+        if self.perform_path_validation.get():
+            # Check for non-standard characters in filename
+            # Allow: A-Z, a-z, 0-9, spaces, and dashes
+            # Detect accented characters and other non-ASCII characters
+            import re
+            import unicodedata
+            
+            # Find problematic characters
+            invalid_chars = []
+            accented_chars = []
+            
+            for char in file_name:
+                # Skip allowed characters
+                if re.match(r'[0-9a-zA-Z\- ]', char):
+                    continue
+                    
+                # Detect accented characters
+                category = unicodedata.category(char)
+                if category.startswith('L'):  # Letter category
+                    if char not in accented_chars:
+                        accented_chars.append(char)
+                elif char not in invalid_chars:
+                    invalid_chars.append(char)
+            
+            # Report accented characters
+            if accented_chars:
+                char_list = ', '.join([f"'{c}'" for c in accented_chars])
+                warnings.append(f"Filename contains accented characters: {char_list}")
+                recommendations.append("Accented characters may cause issues on some systems")
+                can_rename = True
+                
+            # Report invalid characters
+            if invalid_chars:
+                char_list = ', '.join([f"'{c}'" for c in invalid_chars])
+                issues.append(f"Filename contains special characters: {char_list}")
+                recommendations.append("Use only numbers, letters, spaces, and dashes for best compatibility")
+                can_rename = True
+        
+        # Generate suggested filename if needed
+        if can_rename:
+            import re
+            import unicodedata
+            
+            # Create safe filename by normalizing and transliterating accented characters
+            # and keeping only allowed chars (alphanumeric, spaces, and dashes)
+            safe_filename = ""
+            
+            # First, normalize and attempt to convert accented characters to ASCII
+            normalized = unicodedata.normalize('NFKD', file_name)
+            for char in normalized:
+                # Skip combining characters (used to create accents)
+                if unicodedata.category(char).startswith('M'):
+                    continue
+                    
+                # Keep alphanumeric chars, spaces, and dashes
+                if re.match(r'[0-9a-zA-Z\- ]', char):
+                    safe_filename += char
+                else:
+                    # Skip other characters
+                    pass
+            
+            # If resulting filename is empty, use a fallback name
+            if not safe_filename.strip():
+                safe_filename = "audiofile"
+                
+            # Remove consecutive spaces and dashes
+            safe_filename = re.sub(r'[ ]+', ' ', safe_filename)  # Collapse multiple spaces
+            safe_filename = re.sub(r'-+', '-', safe_filename)    # Collapse multiple dashes
+            
+            # Remove leading/trailing spaces and dashes
+            safe_filename = safe_filename.strip('- ')
+            
+            # Truncate if still too long
+            if len(safe_filename) > MAX_FILENAME_LENGTH - len(file_ext):
+                safe_filename = safe_filename[:MAX_FILENAME_LENGTH - len(file_ext) - 3] + '...'  # Add ellipsis
+                
+            suggested_filename = safe_filename + file_ext
+        
+        return issues, warnings, recommendations, can_rename, suggested_filename
+        
     def validate_strict_profile(self, file_path, metadata):
         """Validate metadata against the Generic Strict Profile and check file integrity
         
@@ -62,6 +290,8 @@ class CompatibilityChecker:
         recommendations = []
         format_info = {}
         integrity_status = {"status": "OK", "issues": [], "md5": ""}
+        path_can_rename = False
+        suggested_filename = None
         
         # Get file basename and extension
         file_basename = os.path.basename(file_path)
@@ -71,6 +301,31 @@ class CompatibilityChecker:
         if file_basename.startswith("._"):
             issues.append("macOS resource file detected")
             recommendations.append("These hidden resource files are not actual audio files and should be deleted")
+        
+        # Check for file path-related issues
+        path_issues, path_warnings, path_recommendations, path_can_rename, suggested_filename = self.check_path_issues(file_path)
+        issues.extend(path_issues)
+        warnings.extend(path_warnings)
+        recommendations.extend(path_recommendations)
+        
+        # Check parent directory name issues
+        if self.perform_path_validation.get():
+            # Get directory path and check it
+            dir_path = os.path.dirname(file_path)
+            dir_issues, dir_warnings, dir_recommendations, dir_can_rename, suggested_dirname = self.check_directory_path(dir_path)
+            
+            # Add directory issues to results, marking them as directory-related
+            for issue in dir_issues:
+                issues.append(f"Parent directory issue: {issue}")
+            for warning in dir_warnings:
+                warnings.append(f"Parent directory warning: {warning}")
+            for rec in dir_recommendations:
+                recommendations.append(f"Parent directory: {rec}")
+            
+            # Store directory renaming information (if applicable)
+            if dir_can_rename and suggested_dirname:
+                # Add to the path information in the results
+                path_can_rename = True  # This will now indicate that either file or directory has issues
         
         # Check common issues across all formats
         if not metadata.get('title', '').strip():
@@ -238,8 +493,101 @@ class CompatibilityChecker:
             'warnings': warnings,
             'recommendations': recommendations,
             'format_info': format_info,
-            'integrity': integrity_status
+            'integrity': integrity_status,
+            'path': {
+                'can_rename': path_can_rename,
+                'suggested_filename': suggested_filename,
+                'dir_path': os.path.dirname(file_path),
+                'dir_can_rename': dir_can_rename if self.perform_path_validation.get() else False,
+                'suggested_dirname': suggested_dirname if self.perform_path_validation.get() else None
+            }
         }
+    
+    def rename_directory(self, dir_path, new_dirname):
+        """Rename a directory with a safer name
+        
+        Args:
+            dir_path: Original directory path
+            new_dirname: New directory name (without parent path)
+            
+        Returns:
+            dict: Result of the rename operation
+        """
+        result = {"success": False, "message": "", "new_path": None}
+        
+        try:
+            # Get parent directory and construct new path
+            parent_dir = os.path.dirname(dir_path)
+            new_path = os.path.join(parent_dir, new_dirname)
+            
+            # Check if destination already exists
+            if os.path.exists(new_path):
+                result["message"] = f"Cannot rename directory: '{new_dirname}' already exists"
+                return result
+            
+            # Perform the rename
+            os.rename(dir_path, new_path)
+            result["success"] = True
+            result["message"] = f"Directory renamed successfully to '{new_dirname}'"
+            result["new_path"] = new_path
+            
+        except Exception as e:
+            result["message"] = f"Failed to rename directory: {str(e)}"
+            
+        return result
+    
+    def rename_file(self, file_path, new_filename):
+        """Rename a file with a safer filename
+        
+        Args:
+            file_path: Original file path
+            new_filename: New filename (without directory path)
+            
+        Returns:
+            dict: Result of the rename operation
+        """
+        result = {"success": False, "message": "", "new_path": None}
+        
+        try:
+            # Get directory and construct new path
+            dir_path = os.path.dirname(file_path)
+            new_path = os.path.join(dir_path, new_filename)
+            
+            # Check if destination already exists
+            if os.path.exists(new_path):
+                result["message"] = f"Cannot rename: '{new_filename}' already exists"
+                return result
+                
+            # Create a backup of the original file's metadata (if possible)
+            metadata = None
+            try:
+                from mutagen import File
+                audio = File(file_path)
+                if audio is not None:
+                    metadata = audio
+            except Exception:
+                pass  # Ignore errors in metadata backup attempt
+            
+            # Perform the rename
+            os.rename(file_path, new_path)
+            result["success"] = True
+            result["message"] = f"File renamed successfully to '{new_filename}'"
+            result["new_path"] = new_path
+            
+            # Try to restore metadata if available
+            if metadata is not None:
+                try:
+                    new_audio = File(new_path)
+                    if new_audio is not None and hasattr(metadata, 'tags') and metadata.tags:
+                        new_audio.tags = metadata.tags
+                        new_audio.save()
+                except Exception as e:
+                    result["message"] += f" (Warning: metadata transfer had issues: {str(e)})"
+            
+        except Exception as e:
+            result["message"] = f"Failed to rename file: {str(e)}"
+            
+        return result
     
     def cleanup_resource_files(self, directory):
         """Clean up macOS resource files (files starting with ._)
