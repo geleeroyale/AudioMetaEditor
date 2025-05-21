@@ -615,9 +615,12 @@ Version 1.0"""
     # Browse for directory containing audio files
     def browse_directory(self):
         """Open directory browser dialog and load audio files"""
-        # Use direct call without context manager to avoid NSOpenPanel warning
-        # This addresses the reference error to suppress_macos_warnings
-        dir_path = filedialog.askdirectory(initialdir=self.current_dir)
+        # Use suppress_macos_warnings on macOS to handle NSOpenPanel warning
+        if is_macos:
+            with suppress_macos_warnings():
+                dir_path = filedialog.askdirectory(initialdir=self.current_dir)
+        else:
+            dir_path = filedialog.askdirectory(initialdir=self.current_dir)
             
         if dir_path:
             self.current_dir = dir_path
